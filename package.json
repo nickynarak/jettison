@@ -1,0 +1,26 @@
+{
+  "name": "jettison",
+  "version": "0.1.0",
+  "description": "Encode JavaScript binary data into strings to send over the network.",
+  "main": "jettison.coffee",
+  "scripts": {
+    "test": "coffee test_jettison.coffee"
+  },
+  "author": "Nathan Ostgard",
+  "license": "MIT",
+  "devDependencies": {
+    "chai": "^3.0.0"
+  },
+  "dependencies": {
+    "coffee-script": "^1.9.3",
+    "jspack": "0.0.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/noonat/jettison.git"
+  },
+  "bugs": {
+    "url": "https://github.com/noonat/jettison/issues"
+  },
+  "homepage": "https://github.com/noonat/jettison"
+}
