@@ -50,6 +50,12 @@ class Definition
         byteIndex += field.packer.length
     values
 
+  parse: (string) ->
+    @fromByteArray(stringToByteArray(string))
+
+  stringify: (values) ->
+    byteArrayToString(@toByteArray(values))
+
 
 class FormatPacker
 

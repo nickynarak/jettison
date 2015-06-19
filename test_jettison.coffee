@@ -129,18 +129,24 @@ expect(Math.abs(1.00001 - unpacked)).to.be.lessThan(1e-7)
 console.log 'testing encoding and decoding'
 packed = jettison.packers.float64.pack(1.0000001)
 encoded = jettison.byteArrayToString(packed)
+expect(typeof encoded).to.equal('string')
 decoded = jettison.stringToByteArray(encoded)
 expect(decoded).to.deep.equal(packed)
 
 console.log 'testing packets'
-message = jettison.define [
+definition = jettison.define [
   {key: 'id', type: 'int32'}
   {key: 'x', type: 'float64'}
   {key: 'y', type: 'float64'}
 ]
-bytes = message.toByteArray([1, 0.5, 1.5])
+
+bytes = definition.toByteArray([1, 0.5, 1.5])
 expect(bytes).to.deep.equal([
   0, 0, 0, 1, 63, 224, 0, 0, 0, 0, 0, 0, 63, 248, 0, 0, 0, 0, 0, 0])
-values = message.fromByteArray(bytes)
+values = definition.fromByteArray(bytes)
 expect(values).to.deep.equal([1, 0.5, 1.5])
 
+string = definition.stringify([1, 0.5, 1.5])
+expect(typeof string).to.equal('string')
+values = definition.parse(string)
+expect(values).to.deep.equal([1, 0.5, 1.5])
