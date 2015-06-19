@@ -7,37 +7,31 @@ class ArrayPacker
   # it with a uint32 length value. It will first read the length, then read
   # than many of the values from the byte array.
 
-  constructor: (@valuePacker) ->
-    @lengthPacker = new FormatPacker('I')
+  constructor: (@valueFormat) ->
 
   pack: (values, littleEndian) ->
-    if values? and values.length > 0
-      bytes = @lengthPacker.pack(values.length, littleEndian)
-      # This is super inefficient right now and should use a dynamic format
-      # code for jspack or something.
-      i = 0
-      while i < values.length
-        bytes = bytes.concat(@valuePacker.pack(values[i], littleEndian))
-        i += 1
-      bytes
+    length = values?.length or 0
+    if length > 0
+      format = (if littleEndian then '<' else '>') + 'I' + length + @valueFormat
+      jspack.Pack(format, [length].concat(values))
     else
       # Undefined or empty array, just send a 0 length
-      @lengthPacker.pack(0, littleEndian)
+      [0, 0, 0, 0]
 
   unpack: (bytes, byteIndex, littleEndian) ->
-    length = @lengthPacker.unpack(bytes, byteIndex, littleEndian)
-    byteIndex += @lengthPacker.length
-    i = 0
-    values = new Array(length)
-    while i < length
-      values[i] = @valuePacker.unpack(bytes, byteIndex, littleEndian)
-      byteIndex += @valuePacker.length
-      i += 1
-    # Set the length that was unpacked after each unpack, for consistency with
-    # other packer objects. This is used by the definition when unpacking to
-    # know how far to advance in the byte array.
-    @length = @lengthPacker.length + @valuePacker.length * values.length
-    values
+    # First read the number of elements in the array
+    lengthFormat = if littleEndian then '<I' else '>I'
+    lengthLength = jspack.CalcLength(lengthFormat)
+    length = jspack.Unpack(lengthFormat, bytes, byteIndex)
+    # Then read all the elements
+    if length > 0
+      valuesFormat = (if littleEndian then '<' else '>') + length + @valueFormat
+      valuesLength = jspack.CalcLength(valuesFormat)
+      @length = lengthLength + valuesLength
+      jspack.Unpack(valuesFormat, bytes, byteIndex + lengthLength)
+    else
+      @length = lengthLength
+      []
 
 
 class FormatPacker
@@ -108,7 +102,7 @@ class Field
     @packer = if @type is 'array'
       if @valueType is 'array' or isInvalidType(@valueType)
         throw new Error("invalid array value type '#{@valueType}'")
-      new ArrayPacker(packers[@valueType])
+      new ArrayPacker(packers[@valueType].format)
     else
       packers[@type]
 
