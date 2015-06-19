@@ -99,7 +99,7 @@ tests = [
 ]
 
 for test in tests
-  packer = jettison.packers[test.type]
+  packer = jettison._packers[test.type]
   for value, index in test.values
     console.log "testing #{test.type} value #{value}"
     expect(packer.length).to.equal(test.length)
@@ -123,30 +123,81 @@ for test in tests
       expect(unpacked).to.equal(test.unpacked[index])
 
 console.log 'testing float32 approximate conversion'
-unpacked = jettison.packers.float32.unpack(jettison.packers.float32.pack(1.00001))
+unpacked = jettison._packers.float32.unpack(jettison._packers.float32.pack(1.00001))
 expect(Math.abs(1.00001 - unpacked)).to.be.lessThan(1e-7)
 
 console.log 'testing encoding and decoding'
-packed = jettison.packers.float64.pack(1.0000001)
-encoded = jettison.byteArrayToString(packed)
+packed = jettison._packers.float64.pack(1.0000001)
+encoded = jettison._byteArrayToString(packed)
 expect(typeof encoded).to.equal('string')
-decoded = jettison.stringToByteArray(encoded)
+decoded = jettison._stringToByteArray(encoded)
 expect(decoded).to.deep.equal(packed)
 
-console.log 'testing packets'
+console.log 'testing definitions'
 definition = jettison.define [
   {key: 'id', type: 'int32'}
   {key: 'x', type: 'float64'}
   {key: 'y', type: 'float64'}
+  {key: 'points', type: 'array', valueType: 'float64'}
+  {key: 'health', type: 'int16'}
 ]
 
-bytes = definition.toByteArray([1, 0.5, 1.5])
+# test packing and unpacking the definition
+expectedValue =
+  id: 1
+  x: 0.5
+  y: 1.5
+  points: [0.1, 0.2, 0.3, 0.4]
+  health: 100
+bytes = definition.toByteArray(expectedValue)
 expect(bytes).to.deep.equal([
-  0, 0, 0, 1, 63, 224, 0, 0, 0, 0, 0, 0, 63, 248, 0, 0, 0, 0, 0, 0])
-values = definition.fromByteArray(bytes)
-expect(values).to.deep.equal([1, 0.5, 1.5])
+  0, 0, 0, 1,
+  63, 224, 0, 0, 0, 0, 0, 0,
+  63, 248, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 4,
+  63, 185, 153, 153, 153, 153, 153, 154,
+  63, 201, 153, 153, 153, 153, 153, 154,
+  63, 211, 51, 51, 51, 51, 51, 51,
+  63, 217, 153, 153, 153, 153, 153, 154,
+  0, 100,
+])
+value = definition.fromByteArray(bytes)
+expect(value).to.deep.equal(expectedValue)
 
-string = definition.stringify([1, 0.5, 1.5])
+# test encoding and decoding
+string = definition.stringify(expectedValue)
 expect(typeof string).to.equal('string')
-values = definition.parse(string)
-expect(values).to.deep.equal([1, 0.5, 1.5])
+value = definition.parse(string)
+expect(value).to.deep.equal(expectedValue)
+
+console.log 'testing schemas'
+schema = jettison.createSchema()
+schema.define 'spawn', [
+  {key: 'id', type: 'int32'}
+  {key: 'x', type: 'float64'}
+  {key: 'y', type: 'float64'}
+  {key: 'points', type: 'array', valueType: 'float64'}
+]
+schema.define 'position', [
+  {key: 'id', type: 'int32'}
+  {key: 'x', type: 'float64'}
+  {key: 'y', type: 'float64'}
+]
+expectedValue =
+  id: 1
+  x: 0.5
+  y: 1.5
+  points: [-0.1, 0.2, -0.3, 0.4]
+string = schema.stringify('spawn', expectedValue)
+expect(typeof string).to.equal('string')
+value = schema.parse('spawn', string)
+expect(value).to.deep.equal(expectedValue)
+
+expectedValue =
+  id: 1
+  x: -123.456
+  y: 7.89
+string = schema.stringify('position', expectedValue)
+expect(typeof string).to.equal('string')
+value = schema.parse('position', string)
+expect(value).to.deep.equal(expectedValue)
