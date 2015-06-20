@@ -1,9 +1,10 @@
 {
   "name": "jettison",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Encode JavaScript binary data into strings to send over the network.",
-  "main": "jettison.coffee",
+  "main": "jettison.js",
   "scripts": {
+    "prepublish": "coffee --compile --map jettison.coffee",
     "test": "mocha --compilers coffee:coffee-script/register"
   },
   "author": "Nathan Ostgard",
@@ -23,5 +24,6 @@
   "bugs": {
     "url": "https://github.com/noonat/jettison/issues"
   },
-  "homepage": "https://github.com/noonat/jettison"
+  "homepage": "https://github.com/noonat/jettison",
+  "keywords": ["binary", "pack", "struct", "jspack"]
 }
