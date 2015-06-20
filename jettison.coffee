@@ -9,16 +9,7 @@ class ArrayPacker
 
   constructor: (@valueFormat) ->
 
-  pack: (values, littleEndian) ->
-    length = values?.length or 0
-    if length > 0
-      format = (if littleEndian then '<' else '>') + 'I' + length + @valueFormat
-      jspack.Pack(format, [length].concat(values))
-    else
-      # Undefined or empty array, just send a 0 length
-      [0, 0, 0, 0]
-
-  unpack: (bytes, byteIndex, littleEndian) ->
+  fromByteArray: (bytes, byteIndex, littleEndian) ->
     # First read the number of elements in the array
     lengthFormat = if littleEndian then '<I' else '>I'
     lengthLength = jspack.CalcLength(lengthFormat)
@@ -33,6 +24,15 @@ class ArrayPacker
       @length = lengthLength
       []
 
+  toByteArray: (values, littleEndian) ->
+    length = values?.length or 0
+    if length > 0
+      format = (if littleEndian then '<' else '>') + 'I' + length + @valueFormat
+      jspack.Pack(format, [length].concat(values))
+    else
+      # Undefined or empty array, just send a 0 length
+      [0, 0, 0, 0]
+
 
 class FormatPacker
 
@@ -46,16 +46,16 @@ class FormatPacker
     @bigFormat = '>' + @format
     @length = jspack.CalcLength(@format)
 
-  pack: (value, littleEndian) ->
-    format = if littleEndian then @littleFormat else @bigFormat
-    jspack.Pack(format, [value])
-
-  unpack: (bytes, byteIndex, littleEndian) ->
+  fromByteArray: (bytes, byteIndex, littleEndian) ->
     format = if littleEndian then @littleFormat else @bigFormat
     values = jspack.Unpack(format, bytes, byteIndex)
     throw new Error("Error unpacking format #{format} at byteIndex #{byteIndex}
                      (byte array doesn't have enough elements)") unless values?
     values[0]
+
+  toByteArray: (value, littleEndian) ->
+    format = if littleEndian then @littleFormat else @bigFormat
+    jspack.Pack(format, [value])
 
 
 # This is a set of packers that can be used by fields to convert typed values
@@ -65,10 +65,10 @@ class FormatPacker
 packers =
   boolean:
     length: 1
-    pack: (value) ->
-      if value then [1] else [0]
-    unpack: (bytes, byteIndex, littleEndian) ->
+    fromByteArray: (bytes, byteIndex, littleEndian) ->
       if bytes[byteIndex] then true else false
+    toByteArray: (value) ->
+      if value then [1] else [0]
   float32: new FormatPacker('f')
   float64: new FormatPacker('d')
   int8: new FormatPacker('b')
@@ -114,18 +114,18 @@ class Definition
 
   constructor: (@fields, {@id, @key, @littleEndian}={}) ->
 
-  toByteArray: (object) ->
-    bytes = []
-    for {key, packer} in @fields
-      bytes = bytes.concat(packer.pack(object[key], @littleEndian))
-    bytes
-
   fromByteArray: (bytes, byteIndex=0) ->
     values = {}
     for {key, packer} in @fields
-      values[key] = packer.unpack(bytes, byteIndex, @littleEndian)
+      values[key] = packer.fromByteArray(bytes, byteIndex, @littleEndian)
       byteIndex += packer.length
     values
+
+  toByteArray: (object) ->
+    bytes = []
+    for {key, packer} in @fields
+      bytes = bytes.concat(packer.toByteArray(object[key], @littleEndian))
+    bytes
 
   parse: (string) ->
     @fromByteArray(stringToByteArray(string))
@@ -159,7 +159,7 @@ class Schema
   parse: (string) ->
     bytes = stringToByteArray(string)
     idPacker = packers[@idType]
-    id = idPacker.unpack(bytes, 0)
+    id = idPacker.fromByteArray(bytes, 0)
     unless (definition = @definitionsById[id])?
       throw new Error("'#{id}' is not defined in schema")
     definition.fromByteArray(bytes, idPacker.length)
@@ -167,7 +167,7 @@ class Schema
   stringify: (key, object) ->
     unless (definition = @definitions[key])?
       throw new Error("'#{key}' is not defined in schema")
-    idBytes = packers[@idType].pack(definition.id)
+    idBytes = packers[@idType].toByteArray(definition.id)
     byteArrayToString(idBytes.concat(definition.toByteArray(object)))
 
 

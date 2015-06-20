@@ -105,30 +105,31 @@ describe 'jettison', ->
       expect(packer.length).to.equal(test.length)
       for value, index in test.values
         # test little endian packing
-        packed = packer.pack(value)
+        packed = packer.toByteArray(value)
         expect(packed.length).to.equal(test.length)
         expect(packed).to.deep.equal(test.packed[index])
-        unpacked = packer.unpack(packed, 0, false)
+        unpacked = packer.fromByteArray(packed, 0, false)
         if isNaN(value)
           expect(isNaN(unpacked)).to.be.true
         else
           expect(unpacked).to.equal(test.unpacked[index])
         # test big endian packing
-        littlePacked = packer.pack(value, true)
+        littlePacked = packer.toByteArray(value, true)
         expect(littlePacked.length).to.equal(test.length)
         expect(littlePacked).to.deep.equal(test.packed[index].reverse())
-        unpacked = packer.unpack(littlePacked, 0, true)
+        unpacked = packer.fromByteArray(littlePacked, 0, true)
         if isNaN(value)
           expect(isNaN(unpacked)).to.be.true
         else
           expect(unpacked).to.equal(test.unpacked[index])
 
   it 'should be approximately convert float32 values', ->
-    unpacked = jettison._packers.float32.unpack(jettison._packers.float32.pack(1.00001))
+    unpacked = jettison._packers.float32.fromByteArray(
+      jettison._packers.float32.toByteArray(1.00001))
     expect(Math.abs(1.00001 - unpacked)).to.be.lessThan(1e-7)
 
   it 'should convert between byte arrays and strings', ->
-    packed = jettison._packers.float64.pack(1.0000001)
+    packed = jettison._packers.float64.toByteArray(1.0000001)
     encoded = jettison._byteArrayToString(packed)
     expect(typeof encoded).to.equal('string')
     decoded = jettison._stringToByteArray(encoded)
