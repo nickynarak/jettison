@@ -112,12 +112,12 @@ class Definition
   # Definitions are a grouping of fields, and are used to encode or decode an
   # individual message. They can be grouped into schemas or used standalone.
 
-  constructor: (@fields, {@littleEndian}={}) ->
+  constructor: (@fields, {@id, @key, @littleEndian}={}) ->
 
-  toByteArray: (values) ->
+  toByteArray: (object) ->
     bytes = []
     for {key, packer} in @fields
-      bytes = bytes.concat(packer.pack(values[key], @littleEndian))
+      bytes = bytes.concat(packer.pack(object[key], @littleEndian))
     bytes
 
   fromByteArray: (bytes, byteIndex=0) ->
@@ -130,8 +130,8 @@ class Definition
   parse: (string) ->
     @fromByteArray(stringToByteArray(string))
 
-  stringify: (values) ->
-    byteArrayToString(@toByteArray(values))
+  stringify: (object) ->
+    byteArrayToString(@toByteArray(object))
 
 
 class Schema
@@ -139,24 +139,36 @@ class Schema
   # A schema is a grouping of definitions. It allows you to encode packets
   # by name, in a way that can be decoded automatically by a matching schema
   # on the other end of a connection.
+  #
+  # Note that this assumes you won't have more than 255 packets, for now.
 
-  constructor: ->
+  constructor: ({@idType}={}) ->
     @definitions = {}
+    @definitionsById = {}
+    @idType or= 'uint8'
+    @nextDefinitionId = 1
 
   define: (key, fields) ->
-    definition = new Definition(fields.map (options) -> new Field(options))
+    id = @nextDefinitionId++
+    definition = new Definition(fields.map((options) -> new Field(options)),
+                                id: id, key: key)
     @definitions[key] = definition
+    @definitionsById[id] = definition
     definition
 
-  parse: (key, string) ->
-    definition = @definitions[key]
-    throw new Error("'#{key}' is not defined") unless definition?
-    definition.parse(string)
+  parse: (string) ->
+    bytes = stringToByteArray(string)
+    idPacker = packers[@idType]
+    id = idPacker.unpack(bytes, 0)
+    unless (definition = @definitionsById[id])?
+      throw new Error("'#{id}' is not defined in schema")
+    definition.fromByteArray(bytes, idPacker.length)
 
-  stringify: (key, values) ->
-    definition = @definitions[key]
-    throw new Error("'#{key}' is not defined") unless definition?
-    definition.stringify(values)
+  stringify: (key, object) ->
+    unless (definition = @definitions[key])?
+      throw new Error("'#{key}' is not defined in schema")
+    idBytes = packers[@idType].pack(definition.id)
+    byteArrayToString(idBytes.concat(definition.toByteArray(object)))
 
 
 # Convert a byte array into a string. This can end up being a bit more wasteful

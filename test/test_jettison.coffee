@@ -199,7 +199,7 @@ describe 'jettison', ->
         points: [-0.1, 0.2, -0.3, 0.4]
       string = schema.stringify('spawn', expectedValue)
       expect(typeof string).to.equal('string')
-      value = schema.parse('spawn', string)
+      value = schema.parse(string)
       expect(value).to.deep.equal(expectedValue)
 
       expectedValue =
@@ -208,5 +208,5 @@ describe 'jettison', ->
         y: 7.89
       string = schema.stringify('position', expectedValue)
       expect(typeof string).to.equal('string')
-      value = schema.parse('position', string)
+      value = schema.parse(string)
       expect(value).to.deep.equal(expectedValue)
