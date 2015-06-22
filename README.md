@@ -49,6 +49,7 @@ Types that are currently supported are:
 | float32 | 4 byte floating point number. Note that normal JavaScript numbers will be rounded to fit this size, so decoded values will only approximately equal the originals. |
 | float64 | 8 byte floating point number. Normal JavaScript numbers are stored in this format, so these will be transmitted without rounding. |
 | array   | A variable length array of another type. When you use this type, you must also specify a `valueType` field, which will specify the type of value in the array. |
+| string  | A variable length string. JavaScript's UTF-16 strings are encoded to UTF-8 for transmission. |
 
 Note that values out of range will be truncated (so a value of 256 encoded as
 a uint8 will be truncated to 255, and a value of -1 will be truncated to 0).
