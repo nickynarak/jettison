@@ -1,6 +1,9 @@
 jspack = require('jspack').jspack
 
 
+UINT32_LENGTH = 4
+
+
 class ArrayPacker
 
   # An array packer is a special case. It wraps a format packer, but prefixes
@@ -12,16 +15,15 @@ class ArrayPacker
   fromByteArray: (bytes, byteIndex, littleEndian) ->
     # First read the number of elements in the array
     lengthFormat = if littleEndian then '<I' else '>I'
-    lengthLength = jspack.CalcLength(lengthFormat)
-    length = jspack.Unpack(lengthFormat, bytes, byteIndex)
+    length = jspack.Unpack(lengthFormat, bytes, byteIndex)[0]
     # Then read all the elements
     if length > 0
       valuesFormat = (if littleEndian then '<' else '>') + length + @valueFormat
       valuesLength = jspack.CalcLength(valuesFormat)
-      @length = lengthLength + valuesLength
-      jspack.Unpack(valuesFormat, bytes, byteIndex + lengthLength)
+      @length = valuesLength + UINT32_LENGTH
+      jspack.Unpack(valuesFormat, bytes, byteIndex + UINT32_LENGTH)
     else
-      @length = lengthLength
+      @length = UINT32_LENGTH
       []
 
   toByteArray: (values, littleEndian) ->
@@ -30,7 +32,47 @@ class ArrayPacker
       format = (if littleEndian then '<' else '>') + 'I' + length + @valueFormat
       jspack.Pack(format, [length].concat(values))
     else
-      # Undefined or empty array, just send a 0 length
+      # Undefined or empty array, just send a zero length
+      [0, 0, 0, 0]
+
+
+class StringPacker
+
+  # The string packer is another special case. JavaScript strings are UTF-16,
+  # which doesn't encode very efficiently for network traffic. The packer first
+  # converts the strings to UTF-8, then converts that to a byte array. The
+  # byte array is prefixed with the length of the string.
+  #
+  # FIXME: Could probably do this a bit more efficiently by encoding UTF-8
+  # ourselves instead of using encodeURIComponent.
+
+  fromByteArray: (bytes, byteIndex, littleEndian) ->
+    # First read the number of characters in the string
+    lengthFormat = if littleEndian then '<I' else '>I'
+    length = jspack.Unpack(lengthFormat, bytes, byteIndex)[0]
+    # Then read the characters. The string is in UTF-8 format, so we'll need
+    # to convert it back into UTF-16.
+    if length > 0
+      string = ''
+      for i in [byteIndex + UINT32_LENGTH...byteIndex + UINT32_LENGTH + length]
+        string += String.fromCharCode(bytes[i])
+      @length = length + UINT32_LENGTH
+      decodeURIComponent(escape(string))
+    else
+      @length = UINT32_LENGTH
+      ''
+
+  toByteArray: (string, littleEndian) ->
+    if string
+      utf8 = unescape(encodeURIComponent(string))
+      length = utf8.length
+      lengthFormat = if littleEndian then '<I' else '>I'
+      bytes = jspack.Pack(lengthFormat, [length])
+      for i in [0...utf8.length]
+        bytes.push(utf8.charCodeAt(i))
+      bytes
+    else
+      # Undefined or empty string, just send a zero length
       [0, 0, 0, 0]
 
 
@@ -74,6 +116,7 @@ packers =
   int8: new FormatPacker('b')
   int16: new FormatPacker('h')
   int32: new FormatPacker('i')
+  string: new StringPacker()
   uint8: new FormatPacker('B')
   uint16: new FormatPacker('H')
   uint32: new FormatPacker('I')
@@ -82,8 +125,8 @@ packers =
 # Return true is the type is *not* one of the allowed types.
 isInvalidType = (type) ->
   switch (type)
-    when 'array', 'boolean', 'int8', 'int16', 'int32', 'uint8', 'uint16', \
-         'uint32', 'float32', 'float64'
+    when 'array', 'string', 'boolean', 'int8', 'int16', 'int32', 'uint8', \
+         'uint16', 'uint32', 'float32', 'float64'
       false
     else
       true

@@ -128,6 +128,15 @@ describe 'jettison', ->
       jettison._packers.float32.toByteArray(1.00001))
     expect(Math.abs(1.00001 - unpacked)).to.be.lessThan(1e-7)
 
+  it 'should have a string packer', ->
+    packer = jettison._packers.string
+    expect(packer).to.exist
+    packed = packer.toByteArray('hodør')
+    expect(packed.length).to.equal(10)
+    expect(packed).to.deep.equal([0, 0, 0, 6, 104, 111, 100, 195, 184, 114])
+    unpacked = packer.fromByteArray(packed, 0, false)
+    expect(unpacked).to.equal('hodør')
+
   it 'should convert between byte arrays and strings', ->
     packed = jettison._packers.float64.toByteArray(1.0000001)
     encoded = jettison._byteArrayToString(packed)
