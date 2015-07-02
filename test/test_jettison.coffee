@@ -99,46 +99,46 @@ describe 'jettison', ->
     }
   ].forEach (test) ->
 
-    it "should have a #{test.type} packer", ->
-      packer = jettison._packers[test.type]
-      expect(packer).to.exist
-      expect(packer.length).to.equal(test.length)
+    it "should have a #{test.type} codec", ->
+      codec = jettison._codecs[test.type]
+      expect(codec).to.exist
+      expect(codec.length).to.equal(test.length)
       for value, index in test.values
         # test little endian packing
-        packed = packer.toByteArray(value)
+        packed = codec.toByteArray(value)
         expect(packed.length).to.equal(test.length)
         expect(packed).to.deep.equal(test.packed[index])
-        unpacked = packer.fromByteArray(packed, 0, false)
+        unpacked = codec.fromByteArray(packed, 0, false)
         if isNaN(value)
           expect(isNaN(unpacked)).to.be.true
         else
           expect(unpacked).to.equal(test.unpacked[index])
         # test big endian packing
-        littlePacked = packer.toByteArray(value, true)
+        littlePacked = codec.toByteArray(value, true)
         expect(littlePacked.length).to.equal(test.length)
         expect(littlePacked).to.deep.equal(test.packed[index].reverse())
-        unpacked = packer.fromByteArray(littlePacked, 0, true)
+        unpacked = codec.fromByteArray(littlePacked, 0, true)
         if isNaN(value)
           expect(isNaN(unpacked)).to.be.true
         else
           expect(unpacked).to.equal(test.unpacked[index])
 
-  it 'should be approximately convert float32 values', ->
-    unpacked = jettison._packers.float32.fromByteArray(
-      jettison._packers.float32.toByteArray(1.00001))
+  it 'should approximately convert float32 values', ->
+    unpacked = jettison._codecs.float32.fromByteArray(
+      jettison._codecs.float32.toByteArray(1.00001))
     expect(Math.abs(1.00001 - unpacked)).to.be.lessThan(1e-7)
 
-  it 'should have a string packer', ->
-    packer = jettison._packers.string
-    expect(packer).to.exist
-    packed = packer.toByteArray('hodør')
+  it 'should have a string codec', ->
+    codec = jettison._codecs.string
+    expect(codec).to.exist
+    packed = codec.toByteArray('hodør')
     expect(packed.length).to.equal(10)
     expect(packed).to.deep.equal([0, 0, 0, 6, 104, 111, 100, 195, 184, 114])
-    unpacked = packer.fromByteArray(packed, 0, false)
+    unpacked = codec.fromByteArray(packed, 0, false)
     expect(unpacked).to.equal('hodør')
 
   it 'should convert between byte arrays and strings', ->
-    packed = jettison._packers.float64.toByteArray(1.0000001)
+    packed = jettison._codecs.float64.toByteArray(1.0000001)
     encoded = jettison._byteArrayToString(packed)
     expect(typeof encoded).to.equal('string')
     decoded = jettison._stringToByteArray(encoded)

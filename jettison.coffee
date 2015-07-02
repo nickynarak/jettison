@@ -4,9 +4,33 @@ jspack = require('jspack').jspack
 UINT32_LENGTH = 4
 
 
-class ArrayPacker
+class Codec
 
-  # An array packer is a special case. It wraps a format packer, but prefixes
+  # This class encapsulates jspack. The library uses jspack under the hood for
+  # now, but will hopefully its own packing code in the future. jspack does
+  # a lot of regexp magic that jettison doesn't really need.
+
+  constructor: (format) ->
+    @format = format
+    @littleFormat = '<' + @format
+    @bigFormat = '>' + @format
+    @length = jspack.CalcLength(@format)
+
+  fromByteArray: (bytes, byteIndex, littleEndian) ->
+    format = if littleEndian then @littleFormat else @bigFormat
+    values = jspack.Unpack(format, bytes, byteIndex)
+    throw new Error("Error unpacking format #{format} at byteIndex #{byteIndex}
+                     (byte array doesn't have enough elements)") unless values?
+    values[0]
+
+  toByteArray: (value, littleEndian) ->
+    format = if littleEndian then @littleFormat else @bigFormat
+    jspack.Pack(format, [value])
+
+
+class ArrayCodec
+
+  # An array codec is a special case. It wraps a format codec, but prefixes
   # it with a uint32 length value. It will first read the length, then read
   # than many of the values from the byte array.
 
@@ -36,12 +60,23 @@ class ArrayPacker
       [0, 0, 0, 0]
 
 
-class StringPacker
+class BooleanCodec
 
-  # The string packer is another special case. JavaScript strings are UTF-16,
-  # which doesn't encode very efficiently for network traffic. The packer first
+  length: 1
+
+  fromByteArray: (bytes, byteIndex, littleEndian) ->
+    if bytes[byteIndex] then true else false
+
+  toByteArray: (value) ->
+    if value then [1] else [0]
+
+
+class StringCodec
+
+  # The string codec is another special case. JavaScript strings are UTF-16,
+  # which doesn't encode very efficiently for network traffic. The codec first
   # converts the strings to UTF-8, then converts that to a byte array. The
-  # byte array is prefixed with the length of the string.
+  # byte array is prefixed with the length of the UTF-8 string.
   #
   # FIXME: Could probably do this a bit more efficiently by encoding UTF-8
   # ourselves instead of using encodeURIComponent.
@@ -76,50 +111,21 @@ class StringPacker
       [0, 0, 0, 0]
 
 
-class FormatPacker
-
-  # This class encapsulated jspack. The library uses jspack under the hood for
-  # now, but will hopefully its own packing code in the future. jspack does
-  # a lot of regexp magic that jettison doesn't really need.
-
-  constructor: (format) ->
-    @format = format
-    @littleFormat = '<' + @format
-    @bigFormat = '>' + @format
-    @length = jspack.CalcLength(@format)
-
-  fromByteArray: (bytes, byteIndex, littleEndian) ->
-    format = if littleEndian then @littleFormat else @bigFormat
-    values = jspack.Unpack(format, bytes, byteIndex)
-    throw new Error("Error unpacking format #{format} at byteIndex #{byteIndex}
-                     (byte array doesn't have enough elements)") unless values?
-    values[0]
-
-  toByteArray: (value, littleEndian) ->
-    format = if littleEndian then @littleFormat else @bigFormat
-    jspack.Pack(format, [value])
-
-
-# This is a set of packers that can be used by fields to convert typed values
+# This is a set of codecs that can be used by fields to convert typed values
 # into an array of bytes, and to convert those bytes back into values. Note
-# that the "array" type does not have a packer in this object, because
-# ArrayPacker objects are created on the fly as needed.
-packers =
-  boolean:
-    length: 1
-    fromByteArray: (bytes, byteIndex, littleEndian) ->
-      if bytes[byteIndex] then true else false
-    toByteArray: (value) ->
-      if value then [1] else [0]
-  float32: new FormatPacker('f')
-  float64: new FormatPacker('d')
-  int8: new FormatPacker('b')
-  int16: new FormatPacker('h')
-  int32: new FormatPacker('i')
-  string: new StringPacker()
-  uint8: new FormatPacker('B')
-  uint16: new FormatPacker('H')
-  uint32: new FormatPacker('I')
+# that the "array" type does not have a codec in this object, because
+# ArrayCodec objects are created on the fly as needed.
+codecs =
+  boolean: new BooleanCodec()
+  float32: new Codec('f')
+  float64: new Codec('d')
+  int8: new Codec('b')
+  int16: new Codec('h')
+  int32: new Codec('i')
+  string: new StringCodec()
+  uint8: new Codec('B')
+  uint16: new Codec('H')
+  uint32: new Codec('I')
 
 
 # Return true is the type is *not* one of the allowed types.
@@ -142,12 +148,13 @@ class Field
       throw new Error('key is required')
     if isInvalidType(@type)
       throw new Error("invalid type '#{@type}'")
-    @packer = if @type is 'array'
-      if @valueType is 'array' or isInvalidType(@valueType)
+    @codec = if @type is 'array'
+      if (@valueType is 'array' or @valueType is 'string' or
+          isInvalidType(@valueType))
         throw new Error("invalid array value type '#{@valueType}'")
-      new ArrayPacker(packers[@valueType].format)
+      new ArrayCodec(codecs[@valueType].format)
     else
-      packers[@type]
+      codecs[@type]
 
 
 class Definition
@@ -159,15 +166,15 @@ class Definition
 
   fromByteArray: (bytes, byteIndex=0) ->
     values = {}
-    for {key, packer} in @fields
-      values[key] = packer.fromByteArray(bytes, byteIndex, @littleEndian)
-      byteIndex += packer.length
+    for {key, codec} in @fields
+      values[key] = codec.fromByteArray(bytes, byteIndex, @littleEndian)
+      byteIndex += codec.length
     values
 
   toByteArray: (object) ->
     bytes = []
-    for {key, packer} in @fields
-      bytes = bytes.concat(packer.toByteArray(object[key], @littleEndian))
+    for {key, codec} in @fields
+      bytes = bytes.concat(codec.toByteArray(object[key], @littleEndian))
     bytes
 
   parse: (string) ->
@@ -201,16 +208,16 @@ class Schema
 
   parse: (string) ->
     bytes = stringToByteArray(string)
-    idPacker = packers[@idType]
-    id = idPacker.fromByteArray(bytes, 0)
+    idCodec = codecs[@idType]
+    id = idCodec.fromByteArray(bytes, 0)
     unless (definition = @definitionsById[id])?
       throw new Error("'#{id}' is not defined in schema")
-    definition.fromByteArray(bytes, idPacker.length)
+    definition.fromByteArray(bytes, idCodec.length)
 
   stringify: (key, object) ->
     unless (definition = @definitions[key])?
       throw new Error("'#{key}' is not defined in schema")
-    idBytes = packers[@idType].toByteArray(definition.id)
+    idBytes = codecs[@idType].toByteArray(definition.id)
     byteArrayToString(idBytes.concat(definition.toByteArray(object)))
 
 
@@ -245,7 +252,7 @@ createSchema = ->
 
 
 exports._byteArrayToString = byteArrayToString
-exports._packers = packers
+exports._codecs = codecs
 exports._stringToByteArray = stringToByteArray
 exports.createSchema = createSchema
 exports.define = define
