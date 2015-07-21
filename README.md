@@ -40,6 +40,7 @@ Types that are currently supported are:
 
 | Type    | Description |
 | ------- | ----------- |
+| boolean | 1 byte true or false. |
 | int8    | 1 byte signed integer. Range is -128 to 127 (inclusive). |
 | int16   | 2 byte signed integer. Range is -32768 to 32767. |
 | int32   | 4 byte signed integer. Range is -2147483648 to 2147483647. |
