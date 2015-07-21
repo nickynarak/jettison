@@ -7,30 +7,6 @@ UINT32_LENGTH = 4
 Math.log2 ||= (value) -> Math.log(value) / Math.LN2
 
 
-class Codec
-
-  # This class encapsulates jspack. The library uses jspack under the hood for
-  # now, but will hopefully its own packing code in the future. jspack does
-  # a lot of regexp magic that jettison doesn't really need.
-
-  constructor: (format) ->
-    @format = format
-    @littleFormat = '<' + @format
-    @bigFormat = '>' + @format
-    @length = jspack.CalcLength(@format)
-
-  fromByteArray: (bytes, byteIndex, littleEndian) ->
-    format = if littleEndian then @littleFormat else @bigFormat
-    values = jspack.Unpack(format, bytes, byteIndex)
-    throw new Error("Error unpacking format #{format} at byteIndex #{byteIndex}
-                     (byte array doesn't have enough elements)") unless values?
-    values[0]
-
-  toByteArray: (value, littleEndian) ->
-    format = if littleEndian then @littleFormat else @bigFormat
-    jspack.Pack(format, [value])
-
-
 class ArrayCodec
 
   # An array codec is a special case. It wraps a format codec, but prefixes
@@ -38,39 +14,36 @@ class ArrayCodec
   # than many of the values from the byte array.
 
   constructor: (@valueType) ->
-    @valueFormat = switch @valueType
-      when 'float32' then 'f'
-      when 'float64' then 'd'
-      when 'int8' then 'b'
-      when 'int16' then 'h'
-      when 'int32' then 'l'
-      when 'uint8' then 'B'
-      when 'uint16' then 'H'
-      when 'uint32' then 'L'
-      else throw new Exception("Invalid array value type #{valueType}")
+    @lengthCodec = codecs.uint32
+    @valueCodec = codecs[@valueType]
+    unless @valueCodec?
+      throw new Exception("Invalid array value type #{valueType}")
 
   fromByteArray: (bytes, byteIndex, littleEndian) ->
     # First read the number of elements in the array
-    lengthFormat = if littleEndian then '<I' else '>I'
-    length = jspack.Unpack(lengthFormat, bytes, byteIndex)[0]
+    length = @lengthCodec.fromByteArray(bytes, byteIndex, littleEndian)
+    byteIndex += @lengthCodec.length
+
     # Then read all the elements
     if length > 0
-      valuesFormat = (if littleEndian then '<' else '>') + length + @valueFormat
-      valuesLength = jspack.CalcLength(valuesFormat)
-      @length = valuesLength + UINT32_LENGTH
-      jspack.Unpack(valuesFormat, bytes, byteIndex + UINT32_LENGTH)
+      values = new Array(length)
+      for index in [0...length]
+        values[index] = @valueCodec.fromByteArray(bytes, byteIndex,
+                                                  littleEndian)
+        byteIndex += @valueCodec.length
+      @length = @lengthCodec.length + length * @valueCodec.length
+      values
     else
-      @length = UINT32_LENGTH
+      @length = @lengthCodec.length
       []
 
   toByteArray: (values, littleEndian) ->
     length = values?.length or 0
+    bytes = @lengthCodec.toByteArray(length, littleEndian)
     if length > 0
-      format = (if littleEndian then '<' else '>') + 'I' + length + @valueFormat
-      jspack.Pack(format, [length].concat(values))
-    else
-      # Undefined or empty array, just send a zero length
-      [0, 0, 0, 0]
+      for value in values
+        bytes = bytes.concat(@valueCodec.toByteArray(value, littleEndian))
+    bytes
 
 
 class BooleanCodec
