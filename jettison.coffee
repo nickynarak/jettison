@@ -189,18 +189,18 @@ class FloatCodec
       # Encoding gets a little mathy. I'll try to walk through it. We're trying
       # to calculate exponent and significand such that:
       #
-      #     2^e * s = v
+      #     2^x * s = v
       #
       # Where v is the absolute value of the native float that we are encoding,
-      # e is the exponent, and s is the significand.
+      # `x` is the exponent, and `s` is the significand.
       #
       # Let's look at exponent first. Remember that a logarithm base 2 of a
       # value gives you the exponent you need to raise 2 to get the value. That
       # is to say, if you ignore the significand, you can solve this formula
-      # for e like so:
+      # for `x` like so:
       #
-      #     2^e == v
-      #     e == log(v) / log(2)
+      #     2^x == v
+      #     x == log10(v) / log10(2)
       #
       # However, for IEEE 754 encoding, we need the exponent to be a whole
       # number, and most numbers aren't an even power of 2. For example:
@@ -216,22 +216,22 @@ class FloatCodec
       #
       # We end up getting non-integer values. This is where the significand
       # comes in. We need to ensure that the exponent is an integer, and then
-      # make the significand `s` where `1 <= s < 2`, and multiplying `pow(2, e)`
+      # make the significand `s` where `1 <= s < 2`, and multiplying `pow(2, x)`
       # by `s` gives us `v`. IEEE 754 also makes the whole part (the 1 in 1.23)
-      # implicit. So our updated formula for `e` must be:
+      # implicit. So our updated formula for `x` must be:
       #
-      #     e = floor(log(v) / log(2))
+      #     x = floor(log10(v) / log10(2))
       #
       #  And our formula for `s` is:
       #
-      #     2^e * (1 + s) = v
-      #     s + 1 = v / 2^e
-      #     s + 1 = v * (1 / 2^e)
-      #     s + 1 = v * 2^-e
-      #     s = (v * 2^-e) - 1
+      #     2^x * (1 + s) = v
+      #     s + 1 = v / 2^x
+      #     s + 1 = v * (1 / 2^x)
+      #     s + 1 = v * 2^-x
+      #     s = (v * 2^-x) - 1
       #
       # Time to take a nap.
-      #
+
       signed = if value < 0 then 1 else 0
       absValue = Math.abs(value)
       exponent = Math.floor(Math.log2(absValue))

@@ -1,6 +1,11 @@
 expect = require('chai').expect
 jettison = require('../jettison')
 
+class Approx
+
+  constructor: (@value, @epsilon) ->
+
+
 describe 'jettison', ->
   [
     {
@@ -63,11 +68,18 @@ describe 'jettison', ->
     {
       type: 'float32'
       length: 4
-      values: [NaN, Infinity, -Infinity, 0, -0, 1, -1,
+      values: [
+        NaN,
+        Infinity,
+        -Infinity,
+        0,
+        -0,
+        1,
+        -1,
         0.5,   # This tests negative exponents.
         10.5,  # This tests normalized values with a decimal component.
-        # FIXME: denormalized value for float32?
-        # FIXME: overflow value for float32?
+        1e-40, # This tests denormalized values.
+        1e39,  # This tests overflow.
         ],
       packed: [
         [127, 128, 0, 1],
@@ -79,19 +91,26 @@ describe 'jettison', ->
         [191, 128, 0, 0],
         [63, 0, 0, 0],
         [65, 40, 0, 0],
+        [0, 1, 22, 194],
+        [127, 128, 0, 0],
       ]
-      unpacked: [NaN, Infinity, -Infinity, 0, -0, 1, -1, 0.5, 10.5]
+      unpacked: [NaN, Infinity, -Infinity, 0, -0, 1, -1, 0.5, 10.5,
+                 new Approx(1e-40, 0.001), Infinity]
     }
     {
       type: 'float64'
       length: 8
-      # to test: [0, -0, 1e-310, Infinity, -Infinity, NaN]
       values: [
-        NaN, Infinity, -Infinity, 0, -0, 1, -1,
+        NaN,
+        Infinity,
+        -Infinity,
+        0,
+        -0,
+        1,
+        -1,
         0.5,     # This tests negative exponents
         10.234,  # This tests normalized values with a decimal component.
         1e-310,  # This tests denormalized values.
-        1e309,   # This tests overflows.
       ],
       packed: [
         [127, 240, 0, 0, 0, 0, 0, 1],
@@ -106,8 +125,7 @@ describe 'jettison', ->
         [0, 0, 18, 104, 139, 112, 230, 43],
         [127, 240, 0, 0, 0, 0, 0, 0],
       ]
-      unpacked: [NaN, Infinity, -Infinity, 0, -0, 1, -1, 0.5, 10.234, 1e-310,
-                 Infinity]
+      unpacked: [NaN, Infinity, -Infinity, 0, -0, 1, -1, 0.5, 10.234, 1e-310]
     }
   ].forEach (test) ->
 
@@ -117,23 +135,22 @@ describe 'jettison', ->
       expect(codec.length).to.equal(test.length)
       for value, index in test.values
         # test little endian packing
-        packed = codec.toByteArray(value)
-        expect(packed.length).to.equal(test.length)
-        expect(packed).to.deep.equal(test.packed[index])
-        unpacked = codec.fromByteArray(packed, 0, false)
-        if isNaN(value)
-          expect(isNaN(unpacked)).to.be.true
-        else
-          expect(unpacked).to.equal(test.unpacked[index])
-        # test big endian packing
-        littlePacked = codec.toByteArray(value, true)
-        expect(littlePacked.length).to.equal(test.length)
-        expect(littlePacked).to.deep.equal(test.packed[index].reverse())
-        unpacked = codec.fromByteArray(littlePacked, 0, true)
-        if isNaN(value)
-          expect(isNaN(unpacked)).to.be.true
-        else
-          expect(unpacked).to.equal(test.unpacked[index])
+        for littleEndian in [false, true]
+          packed = codec.toByteArray(value, littleEndian)
+          expectedPacked = test.packed[index]
+          if littleEndian
+            expectedPacked = expectedPacked.slice().reverse()
+          expect(packed.length).to.equal(test.length)
+          expect(packed).to.deep.equal(expectedPacked)
+          unpacked = codec.fromByteArray(packed, 0, littleEndian)
+          expectedUnpacked = test.unpacked[index]
+          if expectedUnpacked instanceof Approx
+            expect(Math.abs(unpacked - expectedUnpacked.value))
+              .to.be.lessThan(expectedUnpacked.epsilon)
+          else if isNaN(expectedUnpacked)
+            expect(isNaN(unpacked)).to.be.true
+          else
+            expect(unpacked).to.equal(expectedUnpacked)
 
   it 'should approximately convert float32 values', ->
     packed = jettison._codecs.float32.toByteArray(1.00001)
