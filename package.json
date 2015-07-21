@@ -5,6 +5,7 @@
   "main": "jettison.js",
   "scripts": {
     "prepublish": "coffee --compile --map jettison.coffee",
+    "postpublish": "rm jettison.js jettison.js.map",
     "test": "mocha --compilers coffee:coffee-script/register"
   },
   "author": "Nathan Ostgard",
