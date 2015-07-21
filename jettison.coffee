@@ -1,49 +1,4 @@
-jspack = require('jspack').jspack
-
-
-UINT32_LENGTH = 4
-
-
 Math.log2 ||= (value) -> Math.log(value) / Math.LN2
-
-
-class ArrayCodec
-
-  # An array codec is a special case. It wraps a format codec, but prefixes
-  # it with a uint32 length value. It will first read the length, then read
-  # than many of the values from the byte array.
-
-  constructor: (@valueType) ->
-    @lengthCodec = codecs.uint32
-    @valueCodec = codecs[@valueType]
-    unless @valueCodec?
-      throw new Exception("Invalid array value type #{valueType}")
-
-  fromByteArray: (bytes, byteIndex, littleEndian) ->
-    # First read the number of elements in the array
-    length = @lengthCodec.fromByteArray(bytes, byteIndex, littleEndian)
-    byteIndex += @lengthCodec.length
-
-    # Then read all the elements
-    if length > 0
-      values = new Array(length)
-      for index in [0...length]
-        values[index] = @valueCodec.fromByteArray(bytes, byteIndex,
-                                                  littleEndian)
-        byteIndex += @valueCodec.length
-      @length = @lengthCodec.length + length * @valueCodec.length
-      values
-    else
-      @length = @lengthCodec.length
-      []
-
-  toByteArray: (values, littleEndian) ->
-    length = values?.length or 0
-    bytes = @lengthCodec.toByteArray(length, littleEndian)
-    if length > 0
-      for value in values
-        bytes = bytes.concat(@valueCodec.toByteArray(value, littleEndian))
-    bytes
 
 
 class BooleanCodec
@@ -352,7 +307,7 @@ class FloatCodec
 
 class IntegerCodec
 
-  constructor: (@length, @signed) ->
+  constructor: (@length, {@signed}) ->
     @bitLength = @length * 8
     if @signed
       @signBit = Math.pow(2, @bitLength - 1)
@@ -402,6 +357,46 @@ class IntegerCodec
     bytes
 
 
+class ArrayCodec
+
+  # An array codec is a special case. It wraps a format codec, but prefixes
+  # it with a uint32 length value. It will first read the length, then read
+  # than many of the values from the byte array.
+
+  lengthCodec: new IntegerCodec(4, signed: false)
+
+  constructor: (@valueType) ->
+    @valueCodec = codecs[@valueType]
+    unless @valueCodec?
+      throw new Exception("Invalid array value type #{valueType}")
+
+  fromByteArray: (bytes, byteIndex, littleEndian) ->
+    # First read the number of elements in the array
+    length = @lengthCodec.fromByteArray(bytes, byteIndex, littleEndian)
+    byteIndex += @lengthCodec.length
+
+    # Then read all the elements
+    if length > 0
+      values = new Array(length)
+      for index in [0...length]
+        values[index] = @valueCodec.fromByteArray(bytes, byteIndex,
+                                                  littleEndian)
+        byteIndex += @valueCodec.length
+      @length = @lengthCodec.length + length * @valueCodec.length
+      values
+    else
+      @length = @lengthCodec.length
+      []
+
+  toByteArray: (values, littleEndian) ->
+    length = values?.length or 0
+    bytes = @lengthCodec.toByteArray(length, littleEndian)
+    if length > 0
+      for value in values
+        bytes = bytes.concat(@valueCodec.toByteArray(value, littleEndian))
+    bytes
+
+
 class StringCodec
 
   # The string codec is another special case. JavaScript strings are UTF-16,
@@ -412,34 +407,36 @@ class StringCodec
   # FIXME: Could probably do this a bit more efficiently by encoding UTF-8
   # ourselves instead of using encodeURIComponent.
 
+  lengthCodec: new IntegerCodec(4, signed: false)
+
   fromByteArray: (bytes, byteIndex, littleEndian) ->
     # First read the number of characters in the string
-    lengthFormat = if littleEndian then '<I' else '>I'
-    length = jspack.Unpack(lengthFormat, bytes, byteIndex)[0]
+    length = @lengthCodec.fromByteArray(bytes, byteIndex, littleEndian)
+    byteIndex += @lengthCodec.length
+
     # Then read the characters. The string is in UTF-8 format, so we'll need
     # to convert it back into UTF-16.
     if length > 0
       string = ''
-      for i in [byteIndex + UINT32_LENGTH...byteIndex + UINT32_LENGTH + length]
+      for i in [byteIndex...byteIndex + length]
         string += String.fromCharCode(bytes[i])
-      @length = length + UINT32_LENGTH
+      @length = @lengthCodec.length + length
       decodeURIComponent(escape(string))
     else
-      @length = UINT32_LENGTH
+      @length = @lengthCodec.length
       ''
 
   toByteArray: (string, littleEndian) ->
     if string
       utf8 = unescape(encodeURIComponent(string))
       length = utf8.length
-      lengthFormat = if littleEndian then '<I' else '>I'
-      bytes = jspack.Pack(lengthFormat, [length])
+      bytes = @lengthCodec.toByteArray(length, littleEndian)
       for i in [0...utf8.length]
         bytes.push(utf8.charCodeAt(i))
       bytes
     else
       # Undefined or empty string, just send a zero length
-      [0, 0, 0, 0]
+      @lengthCodec.toByteArray(0, littleEndian)
 
 
 # This is a set of codecs that can be used by fields to convert typed values
@@ -450,16 +447,16 @@ codecs =
   boolean: new BooleanCodec()
   float32: new FloatCodec(4, 23, Math.pow(2, -24) - Math.pow(2, -77))
   float64: new FloatCodec(8, 52, 0)
-  int8: new IntegerCodec(1, true)
-  int16: new IntegerCodec(2, true)
-  int32: new IntegerCodec(4, true)
+  int8: new IntegerCodec(1, signed: true)
+  int16: new IntegerCodec(2, signed: true)
+  int32: new IntegerCodec(4, signed: true)
   string: new StringCodec()
-  uint8: new IntegerCodec(1, false)
-  uint16: new IntegerCodec(2, false)
-  uint32: new IntegerCodec(4, false)
+  uint8: new IntegerCodec(1, signed: false)
+  uint16: new IntegerCodec(2, signed: false)
+  uint32: new IntegerCodec(4, signed: false)
 
 
-# Return true is the type is *not* one of the allowed types.
+# Return true if the type is *not* one of the allowed types.
 isInvalidType = (type) ->
   switch (type)
     when 'array', 'string', 'boolean', 'int8', 'int16', 'int32', 'uint8', \
