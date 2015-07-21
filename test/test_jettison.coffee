@@ -63,39 +63,51 @@ describe 'jettison', ->
     {
       type: 'float32'
       length: 4
-      values: [0, 1, -1, 2, -2, 0.5, -0.5, Infinity, -Infinity, NaN]
+      values: [NaN, Infinity, -Infinity, 0, -0, 1, -1,
+        0.5,   # This tests negative exponents.
+        10.5,  # This tests normalized values with a decimal component.
+        # FIXME: denormalized value for float32?
+        # FIXME: overflow value for float32?
+        ],
       packed: [
-        [0, 0, 0, 0],
-        [63, 128, 0, 0],
-        [191, 128, 0, 0],
-        [64, 0, 0, 0],
-        [192, 0, 0, 0],
-        [63, 0, 0, 0],
-        [191, 0, 0, 0],
+        [127, 128, 0, 1],
         [127, 128, 0, 0],
         [255, 128, 0, 0],
-        [127, 128, 0, 1],
+        [0, 0, 0, 0],
+        [128, 0, 0, 0],
+        [63, 128, 0, 0],
+        [191, 128, 0, 0],
+        [63, 0, 0, 0],
+        [65, 40, 0, 0],
       ]
-      unpacked: [0, 1, -1, 2, -2, 0.5, -0.5, Infinity, -Infinity, NaN]
+      unpacked: [NaN, Infinity, -Infinity, 0, -0, 1, -1, 0.5, 10.5]
     }
     {
       type: 'float64'
       length: 8
-      values: [0, 1, -1, 2, -2, 0.1, -0.1, 1.0000001, Infinity, -Infinity, NaN]
+      # to test: [0, -0, 1e-310, Infinity, -Infinity, NaN]
+      values: [
+        NaN, Infinity, -Infinity, 0, -0, 1, -1,
+        0.5,     # This tests negative exponents
+        10.234,  # This tests normalized values with a decimal component.
+        1e-310,  # This tests denormalized values.
+        1e309,   # This tests overflows.
+      ],
       packed: [
-        [0, 0, 0, 0, 0, 0, 0, 0],
-        [63, 240, 0, 0, 0, 0, 0, 0],
-        [191, 240, 0, 0, 0, 0, 0, 0],
-        [64, 0, 0, 0, 0, 0, 0, 0],
-        [192, 0, 0, 0, 0, 0, 0, 0],
-        [63, 185, 153, 153, 153, 153, 153, 154],
-        [191, 185, 153, 153, 153, 153, 153, 154],
-        [63, 240, 0, 0, 26, 215, 242, 155],
+        [127, 240, 0, 0, 0, 0, 0, 1],
         [127, 240, 0, 0, 0, 0, 0, 0],
         [255, 240, 0, 0, 0, 0, 0, 0],
-        [127, 240, 0, 0, 0, 0, 0, 1],
+        [0, 0, 0, 0, 0, 0, 0, 0],
+        [128, 0, 0, 0, 0, 0, 0, 0],
+        [63, 240, 0, 0, 0, 0, 0, 0],
+        [191, 240, 0, 0, 0, 0, 0, 0],
+        [63, 224, 0, 0, 0, 0, 0, 0],
+        [64, 36, 119, 206, 217, 22, 135, 43],
+        [0, 0, 18, 104, 139, 112, 230, 43],
+        [127, 240, 0, 0, 0, 0, 0, 0],
       ]
-      unpacked: [0, 1, -1, 2, -2, 0.1, -0.1, 1.0000001, Infinity, -Infinity, NaN]
+      unpacked: [NaN, Infinity, -Infinity, 0, -0, 1, -1, 0.5, 10.234, 1e-310,
+                 Infinity]
     }
   ].forEach (test) ->
 
@@ -124,8 +136,9 @@ describe 'jettison', ->
           expect(unpacked).to.equal(test.unpacked[index])
 
   it 'should approximately convert float32 values', ->
+    packed = jettison._codecs.float32.toByteArray(1.00001)
     unpacked = jettison._codecs.float32.fromByteArray(
-      jettison._codecs.float32.toByteArray(1.00001))
+      jettison._codecs.float32.toByteArray(1.00001), 0, false)
     expect(Math.abs(1.00001 - unpacked)).to.be.lessThan(1e-7)
 
   it 'should have a string codec', ->
