@@ -1,6 +1,6 @@
 {
   "name": "jettison",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Encode JavaScript binary data into strings to send over the network.",
   "main": "jettison.js",
   "scripts": {
@@ -22,5 +22,10 @@
     "url": "https://github.com/noonat/jettison/issues"
   },
   "homepage": "https://github.com/noonat/jettison",
-  "keywords": ["binary", "pack", "struct", "jspack"]
+  "keywords": [
+    "binary",
+    "pack",
+    "struct",
+    "jspack"
+  ]
 }
