@@ -3,7 +3,7 @@ Math.log2 ||= (value) -> Math.log(value) / Math.LN2
 
 class BooleanCodec
 
-  length: 1
+  size: 1
 
   fromByteArray: (bytes, byteIndex, littleEndian) ->
     if bytes[byteIndex] then true else false
@@ -61,8 +61,8 @@ class FloatCodec
   #
   # Hopefully that's enough to get you started!
 
-  constructor: (@length, @numSignificandBits, @rt=0) ->
-    @numExponentBits = @length * 8 - @numSignificandBits - 1
+  constructor: (@size, @numSignificandBits, @rt=0) ->
+    @numExponentBits = @size * 8 - @numSignificandBits - 1
     @exponentMax = (1 << @numExponentBits) - 1
     @exponentBias = @exponentMax >> 1
 
@@ -70,7 +70,7 @@ class FloatCodec
     if littleEndian
       # For little endian, start at the end and read backwards, because we're
       # reading the most significant bytes first.
-      i = @length - 1
+      i = @size - 1
       increment = -1
     else
       i = 0
@@ -275,12 +275,12 @@ class FloatCodec
     else
       # If big endian, start at the end and write backwards, because we're
       # writing the least significant bytes first.
-      i = @length - 1
+      i = @size - 1
       increment = -1
 
     # FIXME: This should support passing in an existing array to write into.
     # Adding a no-op byteIndex here for future support.
-    bytes = new Array(@length)
+    bytes = new Array(@size)
     byteIndex = 0
 
     remainingSignificandBits = @numSignificandBits
@@ -307,32 +307,32 @@ class FloatCodec
 
 class IntegerCodec
 
-  constructor: (@length, {@signed}) ->
-    @bitLength = @length * 8
+  constructor: (@size, {@signed}) ->
+    @bitSize = @size * 8
     if @signed
-      @signBit = Math.pow(2, @bitLength - 1)
-      @minValue = -Math.pow(2, @bitLength - 1)
-      @maxValue = Math.pow(2, @bitLength - 1) - 1
+      @signBit = Math.pow(2, @bitSize - 1)
+      @minValue = -Math.pow(2, @bitSize - 1)
+      @maxValue = Math.pow(2, @bitSize - 1) - 1
     else
       @minValue = 0
-      @maxValue = Math.pow(2, @bitLength) - 1
+      @maxValue = Math.pow(2, @bitSize) - 1
 
   fromByteArray: (bytes, byteIndex, littleEndian) ->
     if littleEndian
       i = 0
       increment = 1
     else
-      i = @length - 1
+      i = @size - 1
       increment = -1
     value = 0
     scale = 1
-    stop = i + (increment * @length)
+    stop = i + (increment * @size)
     while i != stop
       value += bytes[byteIndex + i] * scale
       i += increment
       scale *= 256
     if @signed and (value & @signBit)
-      value -= Math.pow(2, @bitLength)
+      value -= Math.pow(2, @bitSize)
     value
 
   toByteArray: (value, littleEndian) ->
@@ -340,7 +340,7 @@ class IntegerCodec
       i = 0
       increment = 1
     else
-      i = @length - 1
+      i = @size - 1
       increment = -1
     value = if value < @minValue
       @minValue
@@ -348,8 +348,8 @@ class IntegerCodec
       @maxValue
     else
       value
-    bytes = new Array(@length)
-    stop = i + (increment * @length)
+    bytes = new Array(@size)
+    stop = i + (increment * @size)
     while i != stop
       bytes[i] = value & 255
       i += increment
@@ -373,7 +373,7 @@ class ArrayCodec
   fromByteArray: (bytes, byteIndex, littleEndian) ->
     # First read the number of elements in the array
     length = @lengthCodec.fromByteArray(bytes, byteIndex, littleEndian)
-    byteIndex += @lengthCodec.length
+    byteIndex += @lengthCodec.size
 
     # Then read all the elements
     if length > 0
@@ -381,11 +381,11 @@ class ArrayCodec
       for index in [0...length]
         values[index] = @valueCodec.fromByteArray(bytes, byteIndex,
                                                   littleEndian)
-        byteIndex += @valueCodec.length
-      @length = @lengthCodec.length + length * @valueCodec.length
+        byteIndex += @valueCodec.size
+      @size = @lengthCodec.size + length * @valueCodec.size
       values
     else
-      @length = @lengthCodec.length
+      @size = @lengthCodec.size
       []
 
   toByteArray: (values, littleEndian) ->
@@ -412,7 +412,7 @@ class StringCodec
   fromByteArray: (bytes, byteIndex, littleEndian) ->
     # First read the number of characters in the string
     length = @lengthCodec.fromByteArray(bytes, byteIndex, littleEndian)
-    byteIndex += @lengthCodec.length
+    byteIndex += @lengthCodec.size
 
     # Then read the characters. The string is in UTF-8 format, so we'll need
     # to convert it back into UTF-16.
@@ -420,10 +420,10 @@ class StringCodec
       string = ''
       for i in [byteIndex...byteIndex + length]
         string += String.fromCharCode(bytes[i])
-      @length = @lengthCodec.length + length
+      @size = @lengthCodec.size + length
       decodeURIComponent(escape(string))
     else
-      @length = @lengthCodec.length
+      @size = @lengthCodec.size
       ''
 
   toByteArray: (string, littleEndian) ->
@@ -496,7 +496,7 @@ class Definition
     values = {}
     for {key, codec} in @fields
       values[key] = codec.fromByteArray(bytes, byteIndex, @littleEndian)
-      byteIndex += codec.length
+      byteIndex += codec.size
     values
 
   toByteArray: (object) ->
@@ -540,7 +540,7 @@ class Schema
     id = idCodec.fromByteArray(bytes, 0)
     unless (definition = @definitionsById[id])?
       throw new Error("'#{id}' is not defined in schema")
-    definition.fromByteArray(bytes, idCodec.length)
+    definition.fromByteArray(bytes, idCodec.size)
 
   stringify: (key, object) ->
     unless (definition = @definitions[key])?

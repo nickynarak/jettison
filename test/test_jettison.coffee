@@ -10,28 +10,28 @@ describe 'jettison', ->
   [
     {
       type: 'boolean'
-      length: 1
+      size: 1
       values: [false, true]
       packed: [[0], [1]]
       unpacked: [false, true]
     }
     {
       type: 'int8'
-      length: 1
+      size: 1
       values: [0, 1, -1, -128, 127, -129, 128]
       packed: [[0], [1], [255], [128], [127], [128], [127]]
       unpacked: [0, 1, -1, -128, 127, -128, 127]
     }
     {
       type: 'int16'
-      length: 2
+      size: 2
       values: [0, 1, -1, -32768, 32767, -32769, 32768]
       packed: [[0, 0], [0, 1], [255, 255], [128, 0], [127, 255], [128, 0], [127, 255]]
       unpacked: [0, 1, -1, -32768, 32767, -32768, 32767]
     }
     {
       type: 'int32'
-      length: 4
+      size: 4
       values: [0, 1, -1, -2147483648, 2147483647, -2147483649, 2147483648]
       packed: [[0, 0, 0, 0], [0, 0, 0, 1], [255, 255, 255, 255],
                [128, 0, 0, 0], [127, 255, 255, 255],
@@ -40,21 +40,21 @@ describe 'jettison', ->
     }
     {
       type: 'uint8'
-      length: 1
+      size: 1
       values: [0, 1, 255, -1, 256]
       packed: [[0], [1], [255], [0], [255]]
       unpacked: [0, 1, 255, 0, 255]
     }
     {
       type: 'uint16'
-      length: 2
+      size: 2
       values: [0, 1, 65535, -1, 65536]
       packed: [[0, 0], [0, 1], [255, 255], [0, 0], [255, 255]]
       unpacked: [0, 1, 65535, 0, 65535]
     }
     {
       type: 'uint32'
-      length: 4
+      size: 4
       values: [0, 1, 4294967295, -1, 4294967296]
       packed: [
         [0, 0, 0, 0],
@@ -67,7 +67,7 @@ describe 'jettison', ->
     }
     {
       type: 'float32'
-      length: 4
+      size: 4
       values: [
         NaN,
         Infinity,
@@ -99,7 +99,7 @@ describe 'jettison', ->
     }
     {
       type: 'float64'
-      length: 8
+      size: 8
       values: [
         NaN,
         Infinity,
@@ -132,7 +132,7 @@ describe 'jettison', ->
     it "should have a #{test.type} codec", ->
       codec = jettison._codecs[test.type]
       expect(codec).to.exist
-      expect(codec.length).to.equal(test.length)
+      expect(codec.size).to.equal(test.size)
       for value, index in test.values
         # test little endian packing
         for littleEndian in [false, true]
@@ -140,7 +140,7 @@ describe 'jettison', ->
           expectedPacked = test.packed[index]
           if littleEndian
             expectedPacked = expectedPacked.slice().reverse()
-          expect(packed.length).to.equal(test.length)
+          expect(packed.length).to.equal(test.size)
           expect(packed).to.deep.equal(expectedPacked)
           unpacked = codec.fromByteArray(packed, 0, littleEndian)
           expectedUnpacked = test.unpacked[index]
