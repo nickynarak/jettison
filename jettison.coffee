@@ -1,6 +1,5 @@
 Math.log2 ||= (value) -> Math.log(value) / Math.LN2
 
-
 class BooleanCodec
 
   size: 1
@@ -8,8 +7,9 @@ class BooleanCodec
   fromByteArray: (bytes, byteIndex, littleEndian) ->
     if bytes[byteIndex] then true else false
 
-  toByteArray: (value) ->
-    if value then [1] else [0]
+  toByteArray: (bytes, byteIndex, value, littleEndian) ->
+    bytes[byteIndex] = if value then 1 else 0
+    @size
 
 
 class FloatCodec
@@ -123,7 +123,7 @@ class FloatCodec
     return ((if signed then -1 else 1) * significand *
             Math.pow(2, exponent - @numSignificandBits))
 
-  toByteArray: (value, littleEndian) ->
+  toByteArray: (bytes, byteIndex, value, littleEndian) ->
     if isNaN(value)
       signed = 0
       biasedExponent = @exponentMax
@@ -264,11 +264,13 @@ class FloatCodec
         significand = ((absValue * coefficient - 1) *
                        Math.pow(2, @numSignificandBits))
 
-    @_floatPartsToByteArray(signed, biasedExponent, significand, littleEndian)
+    @_floatPartsToByteArray(bytes, byteIndex, signed, biasedExponent,
+                            significand, littleEndian)
 
   # This function does just the byte encoding, after the float has been
   # separated into the component parts required for IEEE-754 encoding.
-  _floatPartsToByteArray: (signed, exponent, significand, littleEndian) ->
+  _floatPartsToByteArray: (bytes, byteIndex, signed, exponent, significand,
+                           littleEndian) ->
     if littleEndian
       i = 0
       increment = 1
@@ -277,11 +279,6 @@ class FloatCodec
       # writing the least significant bytes first.
       i = @size - 1
       increment = -1
-
-    # FIXME: This should support passing in an existing array to write into.
-    # Adding a no-op byteIndex here for future support.
-    bytes = new Array(@size)
-    byteIndex = 0
 
     remainingSignificandBits = @numSignificandBits
     while remainingSignificandBits >= 8
@@ -303,7 +300,8 @@ class FloatCodec
 
     bytes[byteIndex + i - increment] |= signed * 128
 
-    bytes
+    @size
+
 
 class IntegerCodec
 
@@ -335,7 +333,7 @@ class IntegerCodec
       value -= Math.pow(2, @bitSize)
     value
 
-  toByteArray: (value, littleEndian) ->
+  toByteArray: (bytes, byteIndex, value, littleEndian) ->
     if littleEndian
       i = 0
       increment = 1
@@ -348,13 +346,12 @@ class IntegerCodec
       @maxValue
     else
       value
-    bytes = new Array(@size)
     stop = i + (increment * @size)
     while i != stop
-      bytes[i] = value & 255
+      bytes[byteIndex + i] = value & 255
       i += increment
       value >>= 8
-    bytes
+    @size
 
 
 class ArrayCodec
@@ -370,6 +367,9 @@ class ArrayCodec
     unless @valueCodec?
       throw new Exception("Invalid array value type #{valueType}")
 
+  getSize: (values) ->
+    @lengthCodec.size + (values?.length or 0) * @valueCodec.size
+
   fromByteArray: (bytes, byteIndex, littleEndian) ->
     # First read the number of elements in the array
     length = @lengthCodec.fromByteArray(bytes, byteIndex, littleEndian)
@@ -382,19 +382,18 @@ class ArrayCodec
         values[index] = @valueCodec.fromByteArray(bytes, byteIndex,
                                                   littleEndian)
         byteIndex += @valueCodec.size
-      @size = @lengthCodec.size + length * @valueCodec.size
       values
     else
-      @size = @lengthCodec.size
       []
 
-  toByteArray: (values, littleEndian) ->
+  toByteArray: (bytes, byteIndex, values, littleEndian) ->
     length = values?.length or 0
-    bytes = @lengthCodec.toByteArray(length, littleEndian)
+    size = @lengthCodec.toByteArray(bytes, byteIndex, length, littleEndian)
     if length > 0
-      for value in values
-        bytes = bytes.concat(@valueCodec.toByteArray(value, littleEndian))
-    bytes
+      for value, index in values
+        size += @valueCodec.toByteArray(bytes, byteIndex + size, value,
+                                        littleEndian)
+    size
 
 
 class StringCodec
@@ -409,6 +408,14 @@ class StringCodec
 
   lengthCodec: new IntegerCodec(4, signed: false)
 
+  getSize: (string, encoded) ->
+    if string
+      # FIXME: This sucks, shouldn't need to encode strings twice.
+      string = unescape(encodeURIComponent(string)) unless encoded
+      @lengthCodec.size + string.length
+    else
+      @lengthCodec.size
+
   fromByteArray: (bytes, byteIndex, littleEndian) ->
     # First read the number of characters in the string
     length = @lengthCodec.fromByteArray(bytes, byteIndex, littleEndian)
@@ -420,23 +427,22 @@ class StringCodec
       string = ''
       for i in [byteIndex...byteIndex + length]
         string += String.fromCharCode(bytes[i])
-      @size = @lengthCodec.size + length
       decodeURIComponent(escape(string))
     else
-      @size = @lengthCodec.size
       ''
 
-  toByteArray: (string, littleEndian) ->
+  toByteArray: (bytes, byteIndex, string, littleEndian) ->
     if string
       utf8 = unescape(encodeURIComponent(string))
       length = utf8.length
-      bytes = @lengthCodec.toByteArray(length, littleEndian)
+      size = @lengthCodec.toByteArray(bytes, byteIndex, length, littleEndian)
       for i in [0...utf8.length]
-        bytes.push(utf8.charCodeAt(i))
-      bytes
+        bytes[byteIndex + size] = utf8.charCodeAt(i)
+        size++
+      size
     else
       # Undefined or empty string, just send a zero length
-      @lengthCodec.toByteArray(0, littleEndian)
+      @lengthCodec.toByteArray(bytes, byteIndex, 0, littleEndian)
 
 
 # This is a set of codecs that can be used by fields to convert typed values
@@ -492,17 +498,33 @@ class Definition
 
   constructor: (@fields, {@id, @key, @littleEndian}={}) ->
 
+  getSize: (object) ->
+    return @size if @size?
+    size = 0
+    fixedSize = true
+    for {key, codec} in @fields
+      if codec.size?
+        size += codec.size
+      else
+        size += codec.getSize(object[key])
+        fixedSize = false
+    @size = size if fixedSize
+    size
+
   fromByteArray: (bytes, byteIndex=0) ->
     values = {}
     for {key, codec} in @fields
-      values[key] = codec.fromByteArray(bytes, byteIndex, @littleEndian)
-      byteIndex += codec.size
+      value = codec.fromByteArray(bytes, byteIndex, @littleEndian)
+      byteIndex += codec.size ? codec.getSize(value)
+      values[key] = value
     values
 
-  toByteArray: (object) ->
-    bytes = []
+  toByteArray: (object, bytes, byteIndex) ->
+    bytes ?= new Array(@getSize(object))
+    byteIndex ?= 0
     for {key, codec} in @fields
-      bytes = bytes.concat(codec.toByteArray(object[key], @littleEndian))
+      byteIndex += codec.toByteArray(bytes, byteIndex, object[key],
+                                     @littleEndian)
     bytes
 
   parse: (string) ->
@@ -545,8 +567,10 @@ class Schema
   stringify: (key, object) ->
     unless (definition = @definitions[key])?
       throw new Error("'#{key}' is not defined in schema")
-    idBytes = codecs[@idType].toByteArray(definition.id)
-    byteArrayToString(idBytes.concat(definition.toByteArray(object)))
+    idCodec = codecs[@idType]
+    bytes = new Array(idCodec.size + definition.getSize(object))
+    byteIndex = idCodec.toByteArray(bytes, 0, definition.id)
+    byteArrayToString(definition.toByteArray(object, bytes, byteIndex))
 
 
 # Convert a byte array into a string. This can end up being a bit more wasteful

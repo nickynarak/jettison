@@ -136,12 +136,16 @@ describe 'jettison', ->
       for value, index in test.values
         # test little endian packing
         for littleEndian in [false, true]
-          packed = codec.toByteArray(value, littleEndian)
+          packed = new Array(codec.size ? codec.getSize(value))
+          expect(packed.length).to.equal(test.size)
+
+          size = codec.toByteArray(packed, 0, value, littleEndian)
+          expect(size).to.equal(test.size)
           expectedPacked = test.packed[index]
           if littleEndian
             expectedPacked = expectedPacked.slice().reverse()
-          expect(packed.length).to.equal(test.size)
           expect(packed).to.deep.equal(expectedPacked)
+
           unpacked = codec.fromByteArray(packed, 0, littleEndian)
           expectedUnpacked = test.unpacked[index]
           if expectedUnpacked instanceof Approx
@@ -153,22 +157,25 @@ describe 'jettison', ->
             expect(unpacked).to.equal(expectedUnpacked)
 
   it 'should approximately convert float32 values', ->
-    packed = jettison._codecs.float32.toByteArray(1.00001)
-    unpacked = jettison._codecs.float32.fromByteArray(
-      jettison._codecs.float32.toByteArray(1.00001), 0, false)
+    packed = new Array(jettison._codecs.float32.size)
+    jettison._codecs.float32.toByteArray(packed, 0, 1.00001)
+    unpacked = jettison._codecs.float32.fromByteArray(packed, 0, false)
     expect(Math.abs(1.00001 - unpacked)).to.be.lessThan(1e-7)
 
   it 'should have a string codec', ->
     codec = jettison._codecs.string
     expect(codec).to.exist
-    packed = codec.toByteArray('hodør')
+    packed = new Array(codec.getSize('hodør'))
     expect(packed.length).to.equal(10)
+    size = codec.toByteArray(packed, 0, 'hodør')
+    expect(size).to.equal(10)
     expect(packed).to.deep.equal([0, 0, 0, 6, 104, 111, 100, 195, 184, 114])
     unpacked = codec.fromByteArray(packed, 0, false)
     expect(unpacked).to.equal('hodør')
 
   it 'should convert between byte arrays and strings', ->
-    packed = jettison._codecs.float64.toByteArray(1.0000001)
+    packed = new Array(jettison._codecs.float64.size)
+    jettison._codecs.float64.toByteArray(packed, 0, 1.0000001)
     encoded = jettison._byteArrayToString(packed)
     expect(typeof encoded).to.equal('string')
     decoded = jettison._stringToByteArray(encoded)
