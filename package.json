@@ -2,10 +2,16 @@
   "name": "jettison",
   "version": "0.5.0",
   "description": "Encode JavaScript binary data into strings to send over the network.",
-  "main": "jettison.js",
+  "main": "./lib/jettison.js",
+  "directories": {
+    "lib": "./lib"
+  },
   "scripts": {
-    "prepublish": "coffee --compile --map jettison.coffee",
-    "postpublish": "rm jettison.js jettison.js.map",
+    "clean": "rm -r lib",
+    "compile": "coffee --compile --map --output lib src/*.coffee",
+    "prepublish": "npm run compile",
+    "postpack": "npm run clean",
+    "postpublish": "npm run clean",
     "test": "mocha --compilers coffee:coffee-script/register"
   },
   "author": "Nathan Ostgard",

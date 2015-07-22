@@ -1,0 +1,6 @@
+*.coffee
+*.tgz
+.DS_Store
+.git*
+src/
+test/

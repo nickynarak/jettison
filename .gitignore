@@ -1,4 +1,4 @@
-jettison.js
-jettison.js.map
-node_modules
-npm-debug.log
+/*.tgz
+/lib
+/node_modules
+/npm-debug.log

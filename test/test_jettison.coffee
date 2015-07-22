@@ -1,5 +1,5 @@
 expect = require('chai').expect
-jettison = require('../jettison')
+jettison = require('../src/jettison')
 
 StreamView = jettison._StreamView
 
@@ -14,8 +14,8 @@ describeJettison = ({withPolyfills}={}) ->
 
     before ->
       if withPolyfills
-        jettison._config.ArrayBuffer = jettison._ArrayBufferPolyfill
-        jettison._config.DataView = jettison._DataViewPolyfill
+        jettison._config.ArrayBuffer = jettison._polyfill.ArrayBufferPolyfill
+        jettison._config.DataView = jettison._polyfill.DataViewPolyfill
       else
         jettison._config.ArrayBuffer = global.ArrayBuffer
         jettison._config.DataView = global.DataView
