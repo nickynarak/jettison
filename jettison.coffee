@@ -1,29 +1,20 @@
-Math.log2 ||= (value) -> Math.log(value) / Math.LN2
-
-class BooleanCodec
-
-  size: 1
-
-  fromByteArray: (bytes, byteIndex, littleEndian) ->
-    if bytes[byteIndex] then true else false
-
-  toByteArray: (bytes, byteIndex, value, littleEndian) ->
-    bytes[byteIndex] = if value then 1 else 0
-    @size
+log2 = Math.log2 or (value) -> Math.log(value) / Math.LN2
 
 
-class FloatCodec
+class FloatPolyfill
 
-  # Oh boy, you're looking at this code, eh?
+  # Oh boy, you're going to try to read this code, eh?
   #
   # It's a bit difficult to follow, so here's a quick summary of the way
   # IEEE-754 floating point encoding works. The floating point value is
-  # deconstructed into three separate values: a signed bit, an exponent, and
-  # a significand. These three values can be combined to recreate the original
-  # float with the formula: sign * Math.pow(2, exponent) * significand
+  # deconstructed into three separate values: a signed bit, an exponent, and a
+  # significand. These three values can be combined to recreate the original
+  # float with the formula:
   #
-  # The sign value always gets 1 bit, and the number of bits for the other
-  # two depends on the total storage allowed (4 bytes for float32, 8 bytes for
+  #     sign * Math.pow(2, exponent) * significand
+  #
+  # The sign value always gets 1 bit, and the number of bits for the other two
+  # depends on the total storage allowed (4 bytes for float32, 8 bytes for
   # float64). For a float32, the significand gets 23 bits and the exponent gets
   # 8. For example, for a big endian float32 value, the components are laid out
   # most significant to least significant like so:
@@ -59,18 +50,99 @@ class FloatCodec
   # This floating point calculator is fun for playing around with bit values:
   # http://www.h-schmidt.net/FloatConverter/IEEE754.html
   #
-  # Hopefully that's enough to get you started!
+  #
+  # Encoding
+  # --------
+  #
+  # Encoding gets a little mathy. I'll try to walk through it. We're trying to
+  # calculate exponent and significand such that:
+  #
+  #     2^x * s = v
+  #
+  # Where `v` is the absolute value of the native float that we are encoding,
+  # `x` is the exponent, and `s` is the significand.
+  #
+  # Let's look at exponent first. Remember that a logarithm base 2 of a value
+  # gives you the exponent you need to raise 2 to get the value. That is to
+  # say, if you ignore the significand, you can solve for `x` like so:
+  #
+  #     2^x == v
+  #     x == log10(v) / log10(2)
+  #
+  # However, for IEEE 754 encoding, we need the exponent to be a whole number,
+  # and most numbers aren't an even power of 2. For example:
+  #
+  #     > Math.log2(0.1)
+  #     -3.321928094887362
+  #     > Math.log2(2)
+  #     1
+  #     > Math.log2(3)
+  #     1.584962500721156
+  #     > Math.log2(4)
+  #     2
+  #
+  # We end up getting non-integer values. This is where the significand comes
+  # in. We need to ensure that the exponent is an integer, and then make the
+  # significand `s` where `1 <= s < 2`, and multiplying `pow(2, x)` by `s`
+  # gives us `v`. IEEE 754 also makes the whole part (the 1 in 1.23) implicit.
+  # So our updated formula for `x` must be:
+  #
+  #     x = floor(log10(v) / log10(2))
+  #
+  # And our formula for `s` is:
+  #
+  #     2^x * (1 + s) = v
+  #     s + 1 = v / 2^x
+  #     s + 1 = v * (1 / 2^x)
+  #     s + 1 = v * 2^-x
+  #     s = (v * 2^-x) - 1
+  #
+  #
+  # Exponent Bias
+  # -------------
+  #
+  # The exponent's range is limited by the number of bits available to it. In
+  # the case of a float64, the exponent has 11 bits, which gives us an unsigned
+  # maximum of:
+  #
+  #     > parseInt('11111111111', 2)
+  #     2047
+  #
+  # But the cases where all the bits are on or off for an exponent have special
+  # meaning (all bits off means it's zero or a denormalized number, all on
+  # means NaN or Infinity). This means that we need to leave the least
+  # significant bit unset for the maximum, which means our maximum and minimum
+  # unsigned ranges representable in a float64 exponent are:
+  #
+  #     > parseInt('11111111110', 2)
+  #     2046
+  #     > parseInt('00000000001', 2)
+  #     1
+  #
+  # But the exponent is signed. The IEEE 754 way to deal with this is to add a
+  # bias of half the maximum to the signed exponent to get it into the unsigned
+  # range, which means our *actual* signed exponent range for float64 is:
+  #
+  #     > bias = 2046 / 2
+  #     1023
+  #     > parseInt('11111111110', 2) - bias
+  #     1023
+  #     > parseInt('00000000001', 2) - bias
+  #     -1022
+  #
+  # Hope this helps make the code a little easier to grok.
 
-  constructor: (@size, @numSignificandBits, @rt=0) ->
-    @numExponentBits = @size * 8 - @numSignificandBits - 1
+  constructor: (@byteLength, {@numSignificandBits, @roundTo}) ->
+    @numExponentBits = @byteLength * 8 - @numSignificandBits - 1
     @exponentMax = (1 << @numExponentBits) - 1
     @exponentBias = @exponentMax >> 1
+    @roundTo ?= 0
 
-  fromByteArray: (bytes, byteIndex, littleEndian) ->
+  get: (bytes, byteOffset, littleEndian) ->
     if littleEndian
       # For little endian, start at the end and read backwards, because we're
       # reading the most significant bytes first.
-      i = @size - 1
+      i = @byteLength - 1
       increment = -1
     else
       i = 0
@@ -78,7 +150,7 @@ class FloatCodec
 
     # For the first byte, the high bit is the signed bit.
     # The rest is part of the exponent.
-    signedAndExponent = bytes[byteIndex + i]
+    signedAndExponent = bytes[byteOffset + i]
     signed = (signedAndExponent >> 7)
     exponent = signedAndExponent & 127
     i += increment
@@ -86,7 +158,7 @@ class FloatCodec
     # Keep reading bytes until we've read the whole exponent.
     remainingExponentBits = @numExponentBits - 7
     while remainingExponentBits > 0
-        exponent = exponent * 256 + bytes[byteIndex + i]
+        exponent = exponent * 256 + bytes[byteOffset + i]
         remainingExponentBits -= 8
         i += increment
 
@@ -99,7 +171,7 @@ class FloatCodec
 
     # Keep reading until we've read the whole significand.
     while remainingSignificandBits > 0
-      significand = significand * 256 + bytes[byteIndex + i]
+      significand = significand * 256 + bytes[byteOffset + i]
       remainingSignificandBits -= 8
       i += increment
 
@@ -123,7 +195,7 @@ class FloatCodec
     return ((if signed then -1 else 1) * significand *
             Math.pow(2, exponent - @numSignificandBits))
 
-  toByteArray: (bytes, byteIndex, value, littleEndian) ->
+  set: (bytes, byteOffset, value, littleEndian) ->
     if isNaN(value)
       signed = 0
       biasedExponent = @exponentMax
@@ -141,55 +213,9 @@ class FloatCodec
       biasedExponent = 0
       significand = 0
     else
-      # Encoding gets a little mathy. I'll try to walk through it. We're trying
-      # to calculate exponent and significand such that:
-      #
-      #     2^x * s = v
-      #
-      # Where v is the absolute value of the native float that we are encoding,
-      # `x` is the exponent, and `s` is the significand.
-      #
-      # Let's look at exponent first. Remember that a logarithm base 2 of a
-      # value gives you the exponent you need to raise 2 to get the value. That
-      # is to say, if you ignore the significand, you can solve this formula
-      # for `x` like so:
-      #
-      #     2^x == v
-      #     x == log10(v) / log10(2)
-      #
-      # However, for IEEE 754 encoding, we need the exponent to be a whole
-      # number, and most numbers aren't an even power of 2. For example:
-      #
-      #     > Math.log2(0.1)
-      #     -3.321928094887362
-      #     > Math.log2(2)
-      #     1
-      #     > Math.log2(3)
-      #     1.584962500721156
-      #     > Math.log2(4)
-      #     2
-      #
-      # We end up getting non-integer values. This is where the significand
-      # comes in. We need to ensure that the exponent is an integer, and then
-      # make the significand `s` where `1 <= s < 2`, and multiplying `pow(2, x)`
-      # by `s` gives us `v`. IEEE 754 also makes the whole part (the 1 in 1.23)
-      # implicit. So our updated formula for `x` must be:
-      #
-      #     x = floor(log10(v) / log10(2))
-      #
-      #  And our formula for `s` is:
-      #
-      #     2^x * (1 + s) = v
-      #     s + 1 = v / 2^x
-      #     s + 1 = v * (1 / 2^x)
-      #     s + 1 = v * 2^-x
-      #     s = (v * 2^-x) - 1
-      #
-      # Time to take a nap.
-
       signed = if value < 0 then 1 else 0
       absValue = Math.abs(value)
-      exponent = Math.floor(Math.log2(absValue))
+      exponent = Math.floor(log2(absValue))
       coefficient = Math.pow(2, -exponent)
       if absValue * coefficient < 1
         # Apparently Math.log() isn't 100% reliable? I haven't een a case yet
@@ -204,47 +230,15 @@ class FloatCodec
       # Round by adding 1/2 the significand's least significant digit
       if exponent + @exponentBias >= 1
           # Normalized: numSignificandBits significand digits
-          absValue += (@rt / coefficient)
+          absValue += (@roundTo / coefficient)
       else
           # Denormalized: <= numSignificandBits significand digits
-          absValue += (@rt * Math.pow(2, 1 - @exponentBias))
+          absValue += (@roundTo * Math.pow(2, 1 - @exponentBias))
 
       if absValue * coefficient >= 2
         # Rounding can mean we need to increment the exponent
         exponent += 1
         coefficient /= 2
-
-      # The exponent's range is limited by the number of bits available to it.
-      # In the case of a float64, the exponent has 11 bits, which gives us an
-      # unsigned maximum of:
-      #
-      #     > parseInt('11111111111', 2)
-      #     2047
-      #
-      # But the cases where all the bits are on or off for an exponent have
-      # special meaning (all bits off means it's zero or a denormalized number,
-      # all on means NaN or Infinity). This means that we need to leave the
-      # least significant bit unset for the maximum, which means our maximum
-      # and minimum unsigned ranges representable in a float64 exponent are:
-      #
-      #     > parseInt('11111111110', 2)
-      #     2046
-      #     > parseInt('00000000001', 2)
-      #     1
-      #
-      # But the exponent is signed. The IEEE 754 way to deal with this is to
-      # add a bias of half the maximum to the signed exponent to get it into
-      # the unsigned range, which means our *actual* signed exponent range for
-      # float64 is:
-      #
-      #     > bias = 2046 / 2
-      #     1023
-      #     > parseInt('11111111110', 2) - bias
-      #     1023
-      #     > parseInt('00000000001', 2) - bias
-      #     -1022
-      #
-      # That's what the logic below is handling.
 
       biasedExponent = exponent + @exponentBias
       if biasedExponent >= @exponentMax
@@ -264,12 +258,12 @@ class FloatCodec
         significand = ((absValue * coefficient - 1) *
                        Math.pow(2, @numSignificandBits))
 
-    @_floatPartsToByteArray(bytes, byteIndex, signed, biasedExponent,
+    @_floatPartsToByteArray(bytes, byteOffset, signed, biasedExponent,
                             significand, littleEndian)
 
   # This function does just the byte encoding, after the float has been
   # separated into the component parts required for IEEE-754 encoding.
-  _floatPartsToByteArray: (bytes, byteIndex, signed, exponent, significand,
+  _floatPartsToByteArray: (bytes, byteOffset, signed, exponent, significand,
                            littleEndian) ->
     if littleEndian
       i = 0
@@ -277,12 +271,12 @@ class FloatCodec
     else
       # If big endian, start at the end and write backwards, because we're
       # writing the least significant bytes first.
-      i = @size - 1
+      i = @byteLength - 1
       increment = -1
 
     remainingSignificandBits = @numSignificandBits
     while remainingSignificandBits >= 8
-      bytes[byteIndex + i] = significand & 0xff
+      bytes[byteOffset + i] = significand & 0xff
       significand /= 256
       remainingSignificandBits -= 8
       i += increment
@@ -293,52 +287,52 @@ class FloatCodec
     exponent = (exponent << remainingSignificandBits) | significand
     remainingExponentBits = @numExponentBits + remainingSignificandBits
     while remainingExponentBits > 0
-      bytes[byteIndex + i] = exponent & 0xff
+      bytes[byteOffset + i] = exponent & 0xff
       exponent /= 256
       remainingExponentBits -= 8
       i += increment
 
-    bytes[byteIndex + i - increment] |= signed * 128
+    bytes[byteOffset + i - increment] |= signed * 128
 
-    @size
+    @byteLength
 
 
-class IntegerCodec
+class IntegerPolyfill
 
-  constructor: (@size, {@signed}) ->
-    @bitSize = @size * 8
+  constructor: (@byteLength, {@signed}) ->
+    @bitLength = @byteLength * 8
     if @signed
-      @signBit = Math.pow(2, @bitSize - 1)
-      @minValue = -Math.pow(2, @bitSize - 1)
-      @maxValue = Math.pow(2, @bitSize - 1) - 1
+      @signBit = Math.pow(2, @bitLength - 1)
+      @minValue = -Math.pow(2, @bitLength - 1)
+      @maxValue = Math.pow(2, @bitLength - 1) - 1
     else
       @minValue = 0
-      @maxValue = Math.pow(2, @bitSize) - 1
+      @maxValue = Math.pow(2, @bitLength) - 1
 
-  fromByteArray: (bytes, byteIndex, littleEndian) ->
+  get: (bytes, byteOffset, littleEndian) ->
     if littleEndian
       i = 0
       increment = 1
     else
-      i = @size - 1
+      i = @byteLength - 1
       increment = -1
     value = 0
     scale = 1
-    stop = i + (increment * @size)
+    stop = i + (increment * @byteLength)
     while i != stop
-      value += bytes[byteIndex + i] * scale
+      value += bytes[byteOffset + i] * scale
       i += increment
       scale *= 256
     if @signed and (value & @signBit)
-      value -= Math.pow(2, @bitSize)
+      value -= Math.pow(2, @bitLength)
     value
 
-  toByteArray: (bytes, byteIndex, value, littleEndian) ->
+  set: (bytes, byteOffset, value, littleEndian) ->
     if littleEndian
       i = 0
       increment = 1
     else
-      i = @size - 1
+      i = @byteLength - 1
       increment = -1
     value = if value < @minValue
       @minValue
@@ -346,12 +340,153 @@ class IntegerCodec
       @maxValue
     else
       value
-    stop = i + (increment * @size)
+    stop = i + (increment * @byteLength)
     while i != stop
-      bytes[byteIndex + i] = value & 255
+      bytes[byteOffset + i] = value & 255
       i += increment
       value >>= 8
-    @size
+    @byteLength
+
+
+# These are some polyfills for the ArrayBuffer and DataView classes. Note that
+# they aren't complete polyfills, just enough for Jettison's needs.
+
+class ArrayBufferPolyfill
+
+  constructor: (length) ->
+    @_bytes = new Array(length)
+    @byteLength = length
+
+
+class DataViewPolyfill
+
+  _polyfills:
+    float32: new FloatPolyfill(4, numSignificandBits: 23,
+                                  roundTo: Math.pow(2, -24) - Math.pow(2, -77))
+    float64: new FloatPolyfill(8, numSignificandBits: 52, roundTo: 0)
+    int8: new IntegerPolyfill(1, signed: true)
+    int16: new IntegerPolyfill(2, signed: true)
+    int32: new IntegerPolyfill(4, signed: true)
+    uint8: new IntegerPolyfill(1, signed: false)
+    uint16: new IntegerPolyfill(2, signed: false)
+    uint32: new IntegerPolyfill(4, signed: false)
+
+  constructor: (@buffer, byteOffset, byteLength) ->
+    @byteOffset = byteOffset ? 0
+    @byteLength = byteLength ? @buffer.byteLength
+    if @byteOffset < @buffer.byteOffset
+      throw new RangeError('Start offset is outside the bounds of the buffer')
+    else if @byteOffset + @byteLength > @buffer.byteOffset + @buffer.byteLength
+      throw new RangeError('Invalid data view length')
+
+  _get: (polyfill, byteOffset, littleEndian) ->
+    byteOffset += @byteOffset
+    @_validateRange(byteOffset, polyfill.byteLength)
+    value = polyfill.get(@buffer._bytes, byteOffset, littleEndian)
+
+  _set: (polyfill, byteOffset, value, littleEndian) ->
+    byteOffset += @byteOffset
+    @_validateRange(byteOffset, polyfill.byteLength)
+    polyfill.set(@buffer._bytes, byteOffset, value, littleEndian)
+
+  _validateRange: (byteOffset, byteLength) ->
+    if typeof byteOffset != 'number'
+      throw new TypeError('Invalid byteOffset argument')
+    if byteOffset < @byteOffset
+      throw new RangeError('Offset is outside the bounds of the DataView')
+    else if byteOffset + byteLength > @byteOffset + @byteLength
+      throw new RangeError('Invalid data view length')
+
+  getFloat32: (byteOffset, littleEndian) ->
+    @_get(@_polyfills.float32, byteOffset, littleEndian)
+
+  getFloat64: (byteOffset, littleEndian) ->
+    @_get(@_polyfills.float64, byteOffset, littleEndian)
+
+  getInt8: (byteOffset, littleEndian) ->
+    @_get(@_polyfills.int8, byteOffset, littleEndian)
+
+  getInt16: (byteOffset, littleEndian) ->
+    @_get(@_polyfills.int16, byteOffset, littleEndian)
+
+  getInt32: (byteOffset, littleEndian) ->
+    @_get(@_polyfills.int32, byteOffset, littleEndian)
+
+  getUint8: (byteOffset, littleEndian) ->
+    @_get(@_polyfills.uint8, byteOffset, littleEndian)
+
+  getUint16: (byteOffset, littleEndian) ->
+    @_get(@_polyfills.uint16, byteOffset, littleEndian)
+
+  getUint32: (byteOffset, littleEndian) ->
+    @_get(@_polyfills.uint32, byteOffset, littleEndian)
+
+  setFloat32: (byteOffset, value, littleEndian) ->
+    @_set(@_polyfills.float32, byteOffset, value, littleEndian)
+
+  setFloat64: (byteOffset, value, littleEndian) ->
+    @_set(@_polyfills.float64, byteOffset, value, littleEndian)
+
+  setInt8: (byteOffset, value, littleEndian) ->
+    @_set(@_polyfills.int8, byteOffset, value, littleEndian)
+
+  setInt16: (byteOffset, value, littleEndian) ->
+    @_set(@_polyfills.int16, byteOffset, value, littleEndian)
+
+  setInt32: (byteOffset, value, littleEndian) ->
+    @_set(@_polyfills.int32, byteOffset, value, littleEndian)
+
+  setUint8: (byteOffset, value, littleEndian) ->
+    @_set(@_polyfills.uint8, byteOffset, value, littleEndian)
+
+  setUint16: (byteOffset, value, littleEndian) ->
+    @_set(@_polyfills.uint16, byteOffset, value, littleEndian)
+
+  setUint32: (byteOffset, value, littleEndian) ->
+    @_set(@_polyfills.uint32, byteOffset, value, littleEndian)
+
+
+# FIXME: always using polyfills for now, there are some encoding clamping
+# inconsistencies with the real DataView that need to be worked out
+globals = global ? window
+if false and globals? and globals.ArrayBuffer? and globals.DataView?
+  ArrayBuffer = globals.ArrayBuffer
+  DataView = globals.DataView
+else
+  ArrayBuffer = ArrayBufferPolyfill
+  DataView = DataViewPolyfill
+
+
+class Codec
+
+  constructor: ({@byteLength, @getter, @setter}) ->
+    unless @byteLength > 0
+      throw new Error('byteLength must be a positive integer')
+    unless DataView.prototype[@getter]?
+      throw new Error("getter '#{@getter}' must be a DataView method")
+    unless DataView.prototype[@setter]?
+      throw new Error("setter '#{@setter}' must be a DataView method")
+
+  get: (streamView, littleEndian) ->
+    value = streamView.dataView[@getter](streamView.byteOffset, littleEndian)
+    streamView.byteOffset += @byteLength
+    value
+
+  set: (streamView, value, littleEndian) ->
+    streamView.dataView[@setter](streamView.byteOffset, value, littleEndian)
+    streamView.byteOffset += @byteLength
+
+
+class BooleanCodec extends Codec
+
+  constructor: ->
+    super(byteLength: 1, getter: 'getUint8', setter: 'setUint8')
+
+  get: (streamView, littleEndian) ->
+    if super(streamView, littleEndian) then true else false
+
+  set: (streamView, value, littleEndian) ->
+    super(streamView, (if value then 1 else 0), littleEndian)
 
 
 class ArrayCodec
@@ -360,40 +495,45 @@ class ArrayCodec
   # it with a uint32 length value. It will first read the length, then read
   # than many of the values from the byte array.
 
-  lengthCodec: new IntegerCodec(4, signed: false)
+  constructor: (valueCodec) ->
+    @lengthCodec = codecs.uint32
+    if typeof valueCodec == 'string'
+      @valueCodec = codecs[valueCodec]
+      unless @valueCodec
+        throw new Error("Invalid array value type '#{valueCodec}'")
+    else
+      @valueCodec = valueCodec
 
-  constructor: (@valueType) ->
-    @valueCodec = codecs[@valueType]
-    unless @valueCodec?
-      throw new Exception("Invalid array value type #{valueType}")
+  getByteLength: (values) ->
+    return 0 unless values?.length > 0
+    if @valueCodec.byteLength?
+      # The value codec has a fixed byte length.
+      @lengthCodec.byteLength + values.length * @valueCodec.byteLength
+    else
+      # The value codec has a dynamic byte lenth (e.g. an array of strings of
+      # different lengths), so we need to get the size of each value on the fly.
+      byteLength = @lengthCodec.byteLength
+      for value in values
+        byteLength += @valueCodec.getByteLength(value)
+      byteLength
 
-  getSize: (values) ->
-    @lengthCodec.size + (values?.length or 0) * @valueCodec.size
-
-  fromByteArray: (bytes, byteIndex, littleEndian) ->
-    # First read the number of elements in the array
-    length = @lengthCodec.fromByteArray(bytes, byteIndex, littleEndian)
-    byteIndex += @lengthCodec.size
-
-    # Then read all the elements
+  get: (streamView, littleEndian) ->
+    # First read the number of elements, then read the elements
+    length = @lengthCodec.get(streamView, littleEndian)
     if length > 0
       values = new Array(length)
       for index in [0...length]
-        values[index] = @valueCodec.fromByteArray(bytes, byteIndex,
-                                                  littleEndian)
-        byteIndex += @valueCodec.size
+        values[index] = @valueCodec.get(streamView, littleEndian)
       values
     else
       []
 
-  toByteArray: (bytes, byteIndex, values, littleEndian) ->
+  set: (streamView, values, littleEndian) ->
     length = values?.length or 0
-    size = @lengthCodec.toByteArray(bytes, byteIndex, length, littleEndian)
+    @lengthCodec.set(streamView, length, littleEndian)
     if length > 0
-      for value, index in values
-        size += @valueCodec.toByteArray(bytes, byteIndex + size, value,
-                                        littleEndian)
-    size
+      for value in values
+        @valueCodec.set(streamView, value, littleEndian)
 
 
 class StringCodec
@@ -406,43 +546,37 @@ class StringCodec
   # FIXME: Could probably do this a bit more efficiently by encoding UTF-8
   # ourselves instead of using encodeURIComponent.
 
-  lengthCodec: new IntegerCodec(4, signed: false)
+  constructor: ->
+    @lengthCodec = codecs.uint32
+    @valueCodec = codecs.uint8
 
-  getSize: (string, encoded) ->
-    if string
-      # FIXME: This sucks, shouldn't need to encode strings twice.
-      string = unescape(encodeURIComponent(string)) unless encoded
-      @lengthCodec.size + string.length
-    else
-      @lengthCodec.size
+  getByteLength: (value) ->
+    # FIXME: This sucks, shouldn't need to encode strings twice.
+    value = unescape(encodeURIComponent(value)) if value
+    @lengthCodec.byteLength + @valueCodec.byteLength * value.length
 
-  fromByteArray: (bytes, byteIndex, littleEndian) ->
-    # First read the number of characters in the string
-    length = @lengthCodec.fromByteArray(bytes, byteIndex, littleEndian)
-    byteIndex += @lengthCodec.size
-
-    # Then read the characters. The string is in UTF-8 format, so we'll need
-    # to convert it back into UTF-16.
+  get: (streamView, littleEndian) ->
+    # First read the number of characters, then the characters
+    length = @lengthCodec.get(streamView, littleEndian)
     if length > 0
       string = ''
-      for i in [byteIndex...byteIndex + length]
-        string += String.fromCharCode(bytes[i])
+      for _ in [0...length]
+        string += String.fromCharCode(@valueCodec.get(streamView, littleEndian))
+      # The string is in UTF-8 format, convert it back to UTF-16
       decodeURIComponent(escape(string))
     else
       ''
 
-  toByteArray: (bytes, byteIndex, string, littleEndian) ->
-    if string
-      utf8 = unescape(encodeURIComponent(string))
-      length = utf8.length
-      size = @lengthCodec.toByteArray(bytes, byteIndex, length, littleEndian)
+  set: (streamView, value, littleEndian) ->
+    if value
+      # Convert the string to UTF-8 to save space
+      utf8 = unescape(encodeURIComponent(value))
+      @lengthCodec.set(streamView, utf8.length, littleEndian)
       for i in [0...utf8.length]
-        bytes[byteIndex + size] = utf8.charCodeAt(i)
-        size++
-      size
+        @valueCodec.set(streamView, utf8.charCodeAt(i), littleEndian)
     else
       # Undefined or empty string, just send a zero length
-      @lengthCodec.toByteArray(bytes, byteIndex, 0, littleEndian)
+      @lengthCodec.set(streamView, 0, littleEndian)
 
 
 # This is a set of codecs that can be used by fields to convert typed values
@@ -451,25 +585,58 @@ class StringCodec
 # ArrayCodec objects are created on the fly as needed.
 codecs =
   boolean: new BooleanCodec()
-  float32: new FloatCodec(4, 23, Math.pow(2, -24) - Math.pow(2, -77))
-  float64: new FloatCodec(8, 52, 0)
-  int8: new IntegerCodec(1, signed: true)
-  int16: new IntegerCodec(2, signed: true)
-  int32: new IntegerCodec(4, signed: true)
-  string: new StringCodec()
-  uint8: new IntegerCodec(1, signed: false)
-  uint16: new IntegerCodec(2, signed: false)
-  uint32: new IntegerCodec(4, signed: false)
+  float32: new Codec(byteLength: 4, getter: 'getFloat32', setter: 'setFloat32')
+  float64: new Codec(byteLength: 8, getter: 'getFloat64', setter: 'setFloat64')
+  int8:    new Codec(byteLength: 1, getter: 'getInt8',    setter: 'setInt8')
+  int16:   new Codec(byteLength: 2, getter: 'getInt16',   setter: 'setInt16')
+  int32:   new Codec(byteLength: 4, getter: 'getInt32',   setter: 'setInt32')
+  uint8:   new Codec(byteLength: 1, getter: 'getUint8',   setter: 'setUint8')
+  uint16:  new Codec(byteLength: 2, getter: 'getUint16',  setter: 'setUint16')
+  uint32:  new Codec(byteLength: 4, getter: 'getUint32',  setter: 'setUint32')
+
+# Create this last, because it refers to the codecs object internally.
+codecs.string = new StringCodec()
 
 
-# Return true if the type is *not* one of the allowed types.
-isInvalidType = (type) ->
+class StreamView
+
+  constructor: (@dataView, @arrayBuffer) ->
+    @byteOffset = 0
+
+  toArray: ->
+    array = new Array(@dataView.byteLength)
+    for byteOffset in [0...@dataView.byteLength]
+      array[byteOffset] = @dataView.getUint8(byteOffset)
+    array
+
+  toString: ->
+    string = ''
+    for byteOffset in [0...@dataView.byteLength]
+      string += String.fromCharCode(@dataView.getUint8(byteOffset))
+    string
+
+  @create: (byteLength) ->
+    arrayBuffer = new ArrayBuffer(byteLength)
+    dataView = new DataView(arrayBuffer)
+    new StreamView(dataView, arrayBuffer)
+
+  @createFromString: (string) ->
+    codec = codecs.uint8
+    streamView = @create(string.length)
+    for index in [0...string.length]
+      codec.set(streamView, string.charCodeAt(index))
+    streamView.byteOffset = 0
+    streamView
+
+
+# Return true if the type is one of the allowed types.
+isValidType = (type) ->
   switch (type)
     when 'array', 'string', 'boolean', 'int8', 'int16', 'int32', 'uint8', \
          'uint16', 'uint32', 'float32', 'float64'
-      false
-    else
       true
+    else
+      false
 
 
 class Field
@@ -480,12 +647,12 @@ class Field
   constructor: ({@key, @type, @valueType}) ->
     if not @key
       throw new Error('key is required')
-    if isInvalidType(@type)
-      throw new Error("invalid type '#{@type}'")
+    if not isValidType(@type)
+      throw new Error("Invalid type '#{@type}'")
     @codec = if @type is 'array'
       if (@valueType is 'array' or @valueType is 'string' or
-          isInvalidType(@valueType))
-        throw new Error("invalid array value type '#{@valueType}'")
+          not isValidType(@valueType))
+        throw new Error("Invalid array value type '#{@valueType}'")
       new ArrayCodec(@valueType)
     else
       codecs[@type]
@@ -498,40 +665,36 @@ class Definition
 
   constructor: (@fields, {@id, @key, @littleEndian}={}) ->
 
-  getSize: (object) ->
-    return @size if @size?
-    size = 0
-    fixedSize = true
+  getByteLength: (object) ->
+    return @byteLength if @byteLength?
+    byteLength = 0
+    fixedByteLength = true
     for {key, codec} in @fields
-      if codec.size?
-        size += codec.size
+      if codec.byteLength?
+        byteLength += codec.byteLength
       else
-        size += codec.getSize(object[key])
-        fixedSize = false
-    @size = size if fixedSize
-    size
+        byteLength += codec.getByteLength(object[key])
+        fixedByteLength = false
+    @byteLength = byteLength if fixedByteLength
+    byteLength
 
-  fromByteArray: (bytes, byteIndex=0) ->
+  get: (streamView) ->
     values = {}
     for {key, codec} in @fields
-      value = codec.fromByteArray(bytes, byteIndex, @littleEndian)
-      byteIndex += codec.size ? codec.getSize(value)
-      values[key] = value
+      values[key] = codec.get(streamView, @littleEndian)
     values
 
-  toByteArray: (object, bytes, byteIndex) ->
-    bytes ?= new Array(@getSize(object))
-    byteIndex ?= 0
+  set: (streamView, object) ->
     for {key, codec} in @fields
-      byteIndex += codec.toByteArray(bytes, byteIndex, object[key],
-                                     @littleEndian)
-    bytes
+      codec.set(streamView, object[key], @littleEndian)
 
   parse: (string) ->
-    @fromByteArray(stringToByteArray(string))
+    @get(StreamView.createFromString(string))
 
   stringify: (object) ->
-    byteArrayToString(@toByteArray(object))
+    streamView = StreamView.create(@getByteLength(object))
+    @set(streamView, object)
+    streamView.toString()
 
 
 class Schema
@@ -557,40 +720,22 @@ class Schema
     definition
 
   parse: (string) ->
-    bytes = stringToByteArray(string)
+    streamView = StreamView.createFromString(string)
     idCodec = codecs[@idType]
-    id = idCodec.fromByteArray(bytes, 0)
+    id = idCodec.get(streamView)
     unless (definition = @definitionsById[id])?
       throw new Error("'#{id}' is not defined in schema")
-    definition.fromByteArray(bytes, idCodec.size)
+    definition.get(streamView)
 
   stringify: (key, object) ->
     unless (definition = @definitions[key])?
       throw new Error("'#{key}' is not defined in schema")
     idCodec = codecs[@idType]
-    bytes = new Array(idCodec.size + definition.getSize(object))
-    byteIndex = idCodec.toByteArray(bytes, 0, definition.id)
-    byteArrayToString(definition.toByteArray(object, bytes, byteIndex))
-
-
-# Convert a byte array into a string. This can end up being a bit more wasteful
-# than the original byte array, but we need to do it this way to send things
-# reliably over websockets.
-byteArrayToString = (bytes) ->
-  string = ''
-  for byte in bytes
-    string += String.fromCharCode(byte)
-  string
-
-
-# Convert an encoded string into a byte array.
-stringToByteArray = (string) ->
-  i = 0
-  bytes = new Array(string.length)
-  while i < string.length
-    bytes[i] = string.charCodeAt(i)
-    i += 1
-  bytes
+    streamView = StreamView.create(idCodec.byteLength +
+                                   definition.getByteLength(object))
+    idCodec.set(streamView, definition.id)
+    definition.set(streamView, object)
+    streamView.toString()
 
 
 # Create a new Definition object.
@@ -603,8 +748,11 @@ createSchema = ->
   new Schema()
 
 
-exports._byteArrayToString = byteArrayToString
+exports._ArrayBuffer = ArrayBuffer
+exports._ArrayBufferPolyfill = ArrayBufferPolyfill
+exports._DataView = DataView
+exports._DataViewPolyfill = DataViewPolyfill
+exports._StreamView = StreamView
 exports._codecs = codecs
-exports._stringToByteArray = stringToByteArray
 exports.createSchema = createSchema
 exports.define = define
