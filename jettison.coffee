@@ -132,7 +132,7 @@ class FloatPolyfill
   #
   # Hope this helps make the code a little easier to grok.
 
-  constructor: (@byteLength, {@numSignificandBits, @roundTo}) ->
+  constructor: ({@byteLength, @numSignificandBits, @roundTo}) ->
     @numExponentBits = @byteLength * 8 - @numSignificandBits - 1
     @exponentMax = (1 << @numExponentBits) - 1
     @exponentBias = @exponentMax >> 1
@@ -199,7 +199,7 @@ class FloatPolyfill
     if isNaN(value)
       signed = 0
       biasedExponent = @exponentMax
-      significand = 1
+      significand = Math.pow(2, @numSignificandBits - 1)
     else if value == Infinity
       signed = 0
       biasedExponent = @exponentMax
@@ -224,9 +224,6 @@ class FloatPolyfill
         exponent -= 1
         coefficient *= 2
 
-      # NOTE: This is from jspack's original code. I'm still trying to
-      # understand exactly why it works.
-      #
       # Round by adding 1/2 the significand's least significant digit
       if exponent + @exponentBias >= 1
           # Normalized: numSignificandBits significand digits
@@ -299,7 +296,7 @@ class FloatPolyfill
 
 class IntegerPolyfill
 
-  constructor: (@byteLength, {@signed}) ->
+  constructor: ({@byteLength, @signed}) ->
     @bitLength = @byteLength * 8
     if @signed
       @signBit = Math.pow(2, @bitLength - 1)
@@ -361,15 +358,22 @@ class ArrayBufferPolyfill
 class DataViewPolyfill
 
   _polyfills:
-    float32: new FloatPolyfill(4, numSignificandBits: 23,
-                                  roundTo: Math.pow(2, -24) - Math.pow(2, -77))
-    float64: new FloatPolyfill(8, numSignificandBits: 52, roundTo: 0)
-    int8: new IntegerPolyfill(1, signed: true)
-    int16: new IntegerPolyfill(2, signed: true)
-    int32: new IntegerPolyfill(4, signed: true)
-    uint8: new IntegerPolyfill(1, signed: false)
-    uint16: new IntegerPolyfill(2, signed: false)
-    uint32: new IntegerPolyfill(4, signed: false)
+    float32: new FloatPolyfill
+      byteLength: 4
+      numSignificandBits: 23
+      # This constant is from jspack's code. I don't understand how this
+      # ends up being half of float32's least significant digit... isn't that
+      # Math.pow(2, -126)? But it works...
+      roundTo: Math.pow(2, -24) - Math.pow(2, -77)
+    float64: new FloatPolyfill
+      byteLength: 8
+      numSignificandBits: 52
+    int8: new IntegerPolyfill(byteLength: 1, signed: true)
+    int16: new IntegerPolyfill(byteLength: 2, signed: true)
+    int32: new IntegerPolyfill(byteLength: 4, signed: true)
+    uint8: new IntegerPolyfill(byteLength: 1, signed: false)
+    uint16: new IntegerPolyfill(byteLength: 2, signed: false)
+    uint32: new IntegerPolyfill(byteLength: 4, signed: false)
 
   constructor: (@buffer, byteOffset, byteLength) ->
     @byteOffset = byteOffset ? 0
@@ -450,11 +454,13 @@ class DataViewPolyfill
 # inconsistencies with the real DataView that need to be worked out
 globals = global ? window
 if false and globals? and globals.ArrayBuffer? and globals.DataView?
-  ArrayBuffer = globals.ArrayBuffer
-  DataView = globals.DataView
+  config =
+    ArrayBuffer: globals.ArrayBuffer
+    DataView: globals.DataView
 else
-  ArrayBuffer = ArrayBufferPolyfill
-  DataView = DataViewPolyfill
+  config =
+    ArrayBuffer: ArrayBufferPolyfill
+    DataView: DataViewPolyfill
 
 
 class Codec
@@ -462,9 +468,9 @@ class Codec
   constructor: ({@byteLength, @getter, @setter}) ->
     unless @byteLength > 0
       throw new Error('byteLength must be a positive integer')
-    unless DataView.prototype[@getter]?
+    unless config.DataView.prototype[@getter]?
       throw new Error("getter '#{@getter}' must be a DataView method")
-    unless DataView.prototype[@setter]?
+    unless config.DataView.prototype[@setter]?
       throw new Error("setter '#{@setter}' must be a DataView method")
 
   get: (streamView, littleEndian) ->
@@ -487,6 +493,41 @@ class BooleanCodec extends Codec
 
   set: (streamView, value, littleEndian) ->
     super(streamView, (if value then 1 else 0), littleEndian)
+
+
+class FloatCodec extends Codec
+
+  constructor: ({byteLength}) ->
+    if byteLength == 4
+      super(byteLength: byteLength, getter: 'getFloat32', setter: 'setFloat32')
+    else if byteLength == 8
+      super(byteLength: byteLength, getter: 'getFloat64', setter: 'setFloat64')
+    else
+      throw new RangeError('byteLength must be 4 or 8 for floats')
+
+
+class IntegerCodec extends Codec
+
+  constructor: ({byteLength, signed}) ->
+    bitLength = byteLength * 8
+    if signed
+      @minValue = -Math.pow(2, bitLength - 1)
+      @maxValue = Math.pow(2, bitLength - 1) - 1
+      getter = "getInt#{bitLength}"
+      setter = "setInt#{bitLength}"
+    else
+      @minValue = 0
+      @maxValue = Math.pow(2, bitLength) - 1
+      getter = "getUint#{bitLength}"
+      setter = "setUint#{bitLength}"
+    super byteLength: byteLength, getter: getter, setter: setter
+
+  set: (streamView, value, littleEndian) ->
+    if value < @minValue
+      value = @minValue
+    else if value > @maxValue
+      value = @maxValue
+    super(streamView, value, littleEndian)
 
 
 class ArrayCodec
@@ -584,15 +625,15 @@ class StringCodec
 # that the "array" type does not have a codec in this object, because
 # ArrayCodec objects are created on the fly as needed.
 codecs =
-  boolean: new BooleanCodec()
-  float32: new Codec(byteLength: 4, getter: 'getFloat32', setter: 'setFloat32')
-  float64: new Codec(byteLength: 8, getter: 'getFloat64', setter: 'setFloat64')
-  int8:    new Codec(byteLength: 1, getter: 'getInt8',    setter: 'setInt8')
-  int16:   new Codec(byteLength: 2, getter: 'getInt16',   setter: 'setInt16')
-  int32:   new Codec(byteLength: 4, getter: 'getInt32',   setter: 'setInt32')
-  uint8:   new Codec(byteLength: 1, getter: 'getUint8',   setter: 'setUint8')
-  uint16:  new Codec(byteLength: 2, getter: 'getUint16',  setter: 'setUint16')
-  uint32:  new Codec(byteLength: 4, getter: 'getUint32',  setter: 'setUint32')
+  boolean: new BooleanCodec
+  float32: new FloatCodec(byteLength: 4)
+  float64: new FloatCodec(byteLength: 8)
+  int8: new IntegerCodec(byteLength: 1, signed: true)
+  int16: new IntegerCodec(byteLength: 2, signed: true)
+  int32: new IntegerCodec(byteLength: 4, signed: true)
+  uint8: new IntegerCodec(byteLength: 1, signed: false)
+  uint16: new IntegerCodec(byteLength: 2, signed: false)
+  uint32: new IntegerCodec(byteLength: 4, signed: false)
 
 # Create this last, because it refers to the codecs object internally.
 codecs.string = new StringCodec()
@@ -616,8 +657,8 @@ class StreamView
     string
 
   @create: (byteLength) ->
-    arrayBuffer = new ArrayBuffer(byteLength)
-    dataView = new DataView(arrayBuffer)
+    arrayBuffer = new config.ArrayBuffer(byteLength)
+    dataView = new config.DataView(arrayBuffer)
     new StreamView(dataView, arrayBuffer)
 
   @createFromString: (string) ->
@@ -748,11 +789,10 @@ createSchema = ->
   new Schema()
 
 
-exports._ArrayBuffer = ArrayBuffer
 exports._ArrayBufferPolyfill = ArrayBufferPolyfill
-exports._DataView = DataView
 exports._DataViewPolyfill = DataViewPolyfill
 exports._StreamView = StreamView
 exports._codecs = codecs
+exports._config = config
 exports.createSchema = createSchema
 exports.define = define
