@@ -1,3 +1,5 @@
+utf8 = require 'utf8'
+
 polyfill = require './polyfill'
 
 
@@ -161,7 +163,7 @@ class StringCodec
 
   getByteLength: (value) ->
     # FIXME: This sucks, shouldn't need to encode strings twice.
-    value = unescape(encodeURIComponent(value)) if value
+    value = utf8.encode(value) if value
     @lengthCodec.byteLength + @valueCodec.byteLength * value.length
 
   get: (streamView, littleEndian) ->
@@ -172,17 +174,17 @@ class StringCodec
       for _ in [0...length]
         string += String.fromCharCode(@valueCodec.get(streamView, littleEndian))
       # The string is in UTF-8 format, convert it back to UTF-16
-      decodeURIComponent(escape(string))
+      utf8.decode(string)
     else
       ''
 
   set: (streamView, value, littleEndian) ->
     if value
       # Convert the string to UTF-8 to save space
-      utf8 = unescape(encodeURIComponent(value))
-      @lengthCodec.set(streamView, utf8.length, littleEndian)
-      for i in [0...utf8.length]
-        @valueCodec.set(streamView, utf8.charCodeAt(i), littleEndian)
+      utf8String = utf8.encode(value)
+      @lengthCodec.set(streamView, utf8String.length, littleEndian)
+      for i in [0...utf8String.length]
+        @valueCodec.set(streamView, utf8String.charCodeAt(i), littleEndian)
     else
       # Undefined or empty string, just send a zero length
       @lengthCodec.set(streamView, 0, littleEndian)

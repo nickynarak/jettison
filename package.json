@@ -7,7 +7,7 @@
     "lib": "./lib"
   },
   "scripts": {
-    "clean": "rm -r lib",
+    "clean": "rimraf lib *.tgz",
     "compile": "coffee --compile --map --output lib src/*.coffee",
     "prepublish": "npm run compile",
     "postpack": "npm run clean",
@@ -19,7 +19,8 @@
   "devDependencies": {
     "chai": "^3.0.0",
     "coffee-script": "^1.9.3",
-    "mocha": "^2.2.5"
+    "mocha": "^2.2.5",
+    "rimraf": "^2.4.2"
   },
   "repository": {
     "type": "git",
@@ -34,5 +35,8 @@
     "pack",
     "struct",
     "jspack"
-  ]
+  ],
+  "dependencies": {
+    "utf8": "^2.1.1"
+  }
 }
