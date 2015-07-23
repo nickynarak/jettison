@@ -30,9 +30,9 @@ class Codec
   constructor: ({@byteLength, @getter, @setter}) ->
     unless @byteLength > 0
       throw new Error('byteLength must be a positive integer')
-    unless config.DataView.prototype[@getter]?
+    unless polyfill.DataViewPolyfill.prototype[@getter]?
       throw new Error("getter '#{@getter}' must be a DataView method")
-    unless config.DataView.prototype[@setter]?
+    unless polyfill.DataViewPolyfill.prototype[@setter]?
       throw new Error("setter '#{@setter}' must be a DataView method")
 
   get: (streamView, littleEndian) ->
