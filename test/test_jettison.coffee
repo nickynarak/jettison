@@ -241,5 +241,6 @@ describeJettison = ({withPolyfills}={}) ->
         value = schema.parse(string)
         expect(value).to.deep.equal(expectedValue)
 
-describeJettison()
+if global.ArrayBuffer? and global.DataView?
+  describeJettison()
 describeJettison(withPolyfills: true)
