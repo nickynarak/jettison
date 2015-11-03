@@ -16,7 +16,7 @@ other side.
 Here's an example schema with two packets:
 
 ```javascript
-var schema = jettison.schema();
+var schema = jettison.createSchema();
 
 // This packet is sent when a new object is created.
 schema.define('spawn', [
