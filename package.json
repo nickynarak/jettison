@@ -1,6 +1,6 @@
 {
   "name": "jettison",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Encode JavaScript binary data into strings to send over the network.",
   "main": "./lib/jettison.js",
   "engines": {
