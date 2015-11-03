@@ -223,20 +223,24 @@ describeJettison = ({withPolyfills}={}) ->
 
       it 'should convert to and from strings', ->
         expectedValue =
-          id: 1
-          x: 0.5
-          y: 1.5
-          points: [-0.1, 0.2, -0.3, 0.4]
-        string = schema.stringify('spawn', expectedValue)
+          key: 'spawn'
+          data:
+            id: 1
+            x: 0.5
+            y: 1.5
+            points: [-0.1, 0.2, -0.3, 0.4]
+        string = schema.stringify(expectedValue.key, expectedValue.data)
         expect(typeof string).to.equal('string')
         value = schema.parse(string)
         expect(value).to.deep.equal(expectedValue)
 
         expectedValue =
-          id: 1
-          x: -123.456
-          y: 7.89
-        string = schema.stringify('position', expectedValue)
+          key: 'position'
+          data:
+            id: 1
+            x: -123.456
+            y: 7.89
+        string = schema.stringify(expectedValue.key, expectedValue.data)
         expect(typeof string).to.equal('string')
         value = schema.parse(string)
         expect(value).to.deep.equal(expectedValue)

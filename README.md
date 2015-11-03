@@ -71,5 +71,7 @@ var string = schema.stringify('spawn', {
   ]
 });
 
-var object = schema.parse(string);
+var parsed = schema.parse(string);
+console.log(parsed.key);   // "spawn"
+console.log(parsed.data);  // {"id": 1, "x": 123.456, ...}
 ```

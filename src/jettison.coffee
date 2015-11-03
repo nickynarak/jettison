@@ -338,7 +338,10 @@ class Schema
     id = idCodec.get(streamView)
     unless (definition = @definitionsById[id])?
       throw new Error("'#{id}' is not defined in schema")
-    definition.get(streamView)
+    {
+      key: definition.key
+      data: definition.get(streamView)
+    }
 
   stringify: (key, object) ->
     unless (definition = @definitions[key])?

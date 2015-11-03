@@ -17,13 +17,24 @@
     "postpublish": "npm run clean",
     "test": "mocha --compilers coffee:coffee-script/register"
   },
+  "browserify": {
+    "transform": [
+      "coffeeify"
+    ]
+  },
   "author": "Nathan Ostgard",
   "license": "MIT",
+  "dependencies": {
+    "utf8": "^2.1.1"
+  },
   "devDependencies": {
+    "browserify": "^11.0.0",
     "chai": "^3.0.0",
     "coffee-script": "^1.9.3",
+    "coffeeify": "^1.1.0",
     "mocha": "^2.2.5",
-    "rimraf": "^2.4.2"
+    "rimraf": "^2.4.2",
+    "webpack": "^1.10.3"
   },
   "repository": {
     "type": "git",
@@ -38,8 +49,5 @@
     "pack",
     "struct",
     "jspack"
-  ],
-  "dependencies": {
-    "utf8": "^2.1.1"
-  }
+  ]
 }
