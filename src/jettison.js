@@ -72,7 +72,6 @@ class Codec {
 */
 class ArrayCodec {
   constructor(valueCodec) {
-    this.lengthCodec = _codecs.uint32;
     if (typeof valueCodec === 'string') {
       this.valueCodec = _codecs[valueCodec];
       if (!this.valueCodec) {
@@ -84,28 +83,26 @@ class ArrayCodec {
   }
 
   getByteLength(values) {
-    if (!values || !values.length) {
-      return 0;
-    }
-    if (this.valueCodec.byteLength != null) {
+    const length = (values && values.length) || 0;
+    let valueByteLength;
+    if (this.valueCodec.byteLength) {
       // The value codec has a fixed byte length.
-      return (this.lengthCodec.byteLength +
-              (values.length * this.valueCodec.byteLength));
+      valueByteLength = length * this.valueCodec.byteLength;
     } else {
-      // The value codec has a dynamic byte lenth (e.g. an array of strings of
-      // different lengths), so we need to get the size of each value on
+      // The value codec has a dynamic byte length (e.g. an array of strings
+      // of different lengths), so we need to get the size of each value on
       // the fly.
-      let byteLength = this.lengthCodec.byteLength;
-      for (let i = 0, il = values.length; i < il; i++) {
-        byteLength += this.valueCodec.getByteLength(values[i]);
+      valueByteLength = 0;
+      for (let i = 0, il = length; i < il; i++) {
+        valueByteLength += this.valueCodec.getByteLength(values[i]);
       }
-      return byteLength;
     }
+    return _codecs.variableLength.getByteLength(length) + valueByteLength;
   }
 
   get(streamView, littleEndian) {
     // First read the number of elements, then read the elements
-    const length = this.lengthCodec.get(streamView, littleEndian);
+    const length = _codecs.variableLength.get(streamView, littleEndian);
     if (length > 0) {
       let values = new Array(length);
       for (let index = 0; index < length; index++) {
@@ -119,7 +116,7 @@ class ArrayCodec {
 
   set(streamView, values, littleEndian) {
     const length = (values && values.length) || 0;
-    this.lengthCodec.set(streamView, length, littleEndian);
+    _codecs.variableLength.set(streamView, length, littleEndian);
     if (length > 0) {
       for (let i = 0, il = values.length; i < il; i++) {
         this.valueCodec.set(streamView, values[i], littleEndian);
