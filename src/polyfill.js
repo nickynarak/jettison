@@ -1,147 +1,148 @@
+/**
+* This file contains things used to polyfill ArrayBuffer and DataView on
+* platforms that don't support them natively. Note that the polyfills here
+* aren't 100% compatible with the real things -- just good enough for the
+* needs of Jettison.
+*/
+
 'use strict';
-
-
-// This file contains things used to polyfill ArrayBuffer and DataView on
-// platforms that don't support them natively. Note that the polyfills here
-// aren't 100% compatible with the real things -- just good enough for the
-// needs of Jettison.
 
 export let log2 = Math.log2 || ((value) => {
   return Math.log(value) / Math.LN2;
 });
 
 
+/**
+* Oh boy, you're going to try to read this code, eh?
+*
+* It's a bit difficult to follow, so here's a quick summary of the way
+* IEEE-754 floating point encoding works. The floating point value is
+* deconstructed into three separate values: a signed bit, an exponent, and a
+* significand. These three values can be combined to recreate the original
+* float with the formula:
+*
+*     sign * Math.pow(2, exponent) * significand
+*
+* The sign value always gets 1 bit, and the number of bits for the other two
+* depends on the total storage allowed (4 bytes for float32, 8 bytes for
+* float64). For a float32, the significand gets 23 bits and the exponent gets
+* 8. For example, for a big endian float32 value, the components are laid out
+* most significant to least significant like so:
+*
+* - sign (bit 0)
+* - exponent (bits 1..9)
+* - significand (bits 10..32)
+*
+* There are some special cases for representing special values:
+*
+* - NaN has all the exponent and significand bits set.
+* - Infinity has all the exponent bits set, all the significand bits unset,
+*   and the sign bit unset. -Infinity is the same, but the sign bit is set.
+* - An exponent with all the bits unset represents a denormalized value (or
+*   zero, if all the significand bits are also unset).
+* - Anything else is a normalized value.
+*
+* As for the difference between normalized and denormalized values... I'm
+* getting out of my knowledge area here, but normalized values are ones that
+* are representable using both an exponent and a significand component.
+* Denormalized values represent the range between the smallest possible
+* normalized value and zero.
+*
+* So, that is to say, if you had a normalized value with an exponent with the
+* least significant bit set, and a significand with all bits unset, your
+* value is something like 1.17549435E-38. For a denormalized value where all
+* bits of the exponent are unset and all bits of the significand are set is
+* something like 1.1754942E-38 -- just below the smallest normalized value.
+*
+* You'll find a far better explanation here:
+* http://stackoverflow.com/a/15142269/648615
+*
+* This floating point calculator is fun for playing around with bit values:
+* http://www.h-schmidt.net/FloatConverter/IEEE754.html
+*
+*
+* Encoding
+* --------
+*
+* Encoding gets a little mathy. I'll try to walk through it. We're trying to
+* calculate exponent and significand such that:
+*
+*     2^x * s = v
+*
+* Where `v` is the absolute value of the native float that we are encoding,
+* `x` is the exponent, and `s` is the significand.
+*
+* Let's look at exponent first. Remember that a logarithm base 2 of a value
+* gives you the exponent you need to raise 2 to get the value. That is to
+* say, if you ignore the significand, you can solve for `x` like so:
+*
+*     2^x == v
+*     x == log10(v) / log10(2)
+*
+* However, for IEEE 754 encoding, we need the exponent to be a whole number,
+* and most numbers aren't an even power of 2. For example:
+*
+*     > Math.log2(0.1)
+*     -3.321928094887362
+*     > Math.log2(2)
+*     1
+*     > Math.log2(3)
+*     1.584962500721156
+*     > Math.log2(4)
+*     2
+*
+* We end up getting non-integer values. This is where the significand comes
+* in. We need to ensure that the exponent is an integer, and then make the
+* significand `s` where `1 <= s < 2`, and multiplying `pow(2, x)` by `s`
+* gives us `v`. IEEE 754 also makes the whole part (the 1 in 1.23) implicit.
+* So our updated formula for `x` must be:
+*
+*     x = floor(log10(v) / log10(2))
+*
+* And our formula for `s` is:
+*
+*     2^x * (1 + s) = v
+*     s + 1 = v / 2^x
+*     s + 1 = v * (1 / 2^x)
+*     s + 1 = v * 2^-x
+*     s = (v * 2^-x) - 1
+*
+*
+* Exponent Bias
+* -------------
+*
+* The exponent's range is limited by the number of bits available to it. In
+* the case of a float64, the exponent has 11 bits, which gives us an unsigned
+* maximum of:
+*
+*     > parseInt('11111111111', 2)
+*     2047
+*
+* But the cases where all the bits are on or off for an exponent have special
+* meaning (all bits off means it's zero or a denormalized number, all on
+* means NaN or Infinity). This means that we need to leave the least
+* significant bit unset for the maximum, which means our maximum and minimum
+* unsigned ranges representable in a float64 exponent are:
+*
+*     > parseInt('11111111110', 2)
+*     2046
+*     > parseInt('00000000001', 2)
+*     1
+*
+* But the exponent is signed. The IEEE 754 way to deal with this is to add a
+* bias of half the maximum to the signed exponent to get it into the unsigned
+* range, which means our *actual* signed exponent range for float64 is:
+*
+*     > bias = 2046 / 2
+*     1023
+*     > parseInt('11111111110', 2) - bias
+*     1023
+*     > parseInt('00000000001', 2) - bias
+*     -1022
+*
+* Hope this helps make the code a little easier to grok.
+*/
 export class FloatPolyfill {
-
-  // Oh boy, you're going to try to read this code, eh?
-  //
-  // It's a bit difficult to follow, so here's a quick summary of the way
-  // IEEE-754 floating point encoding works. The floating point value is
-  // deconstructed into three separate values: a signed bit, an exponent, and a
-  // significand. These three values can be combined to recreate the original
-  // float with the formula:
-  //
-  //     sign * Math.pow(2, exponent) * significand
-  //
-  // The sign value always gets 1 bit, and the number of bits for the other two
-  // depends on the total storage allowed (4 bytes for float32, 8 bytes for
-  // float64). For a float32, the significand gets 23 bits and the exponent gets
-  // 8. For example, for a big endian float32 value, the components are laid out
-  // most significant to least significant like so:
-  //
-  // - sign (bit 0)
-  // - exponent (bits 1..9)
-  // - significand (bits 10..32)
-  //
-  // There are some special cases for representing special values:
-  //
-  // - NaN has all the exponent and significand bits set.
-  // - Infinity has all the exponent bits set, all the significand bits unset,
-  //   and the sign bit unset. -Infinity is the same, but the sign bit is set.
-  // - An exponent with all the bits unset represents a denormalized value (or
-  //   zero, if all the significand bits are also unset).
-  // - Anything else is a normalized value.
-  //
-  // As for the difference between normalized and denormalized values... I'm
-  // getting out of my knowledge area here, but normalized values are ones that
-  // are representable using both an exponent and a significand component.
-  // Denormalized values represent the range between the smallest possible
-  // normalized value and zero.
-  //
-  // So, that is to say, if you had a normalized value with an exponent with the
-  // least significant bit set, and a significand with all bits unset, your
-  // value is something like 1.17549435E-38. For a denormalized value where all
-  // bits of the exponent are unset and all bits of the significand are set is
-  // something like 1.1754942E-38 -- just below the smallest normalized value.
-  //
-  // You'll find a far better explanation here:
-  // http://stackoverflow.com/a/15142269/648615
-  //
-  // This floating point calculator is fun for playing around with bit values:
-  // http://www.h-schmidt.net/FloatConverter/IEEE754.html
-  //
-  //
-  // Encoding
-  // --------
-  //
-  // Encoding gets a little mathy. I'll try to walk through it. We're trying to
-  // calculate exponent and significand such that:
-  //
-  //     2^x * s = v
-  //
-  // Where `v` is the absolute value of the native float that we are encoding,
-  // `x` is the exponent, and `s` is the significand.
-  //
-  // Let's look at exponent first. Remember that a logarithm base 2 of a value
-  // gives you the exponent you need to raise 2 to get the value. That is to
-  // say, if you ignore the significand, you can solve for `x` like so:
-  //
-  //     2^x == v
-  //     x == log10(v) / log10(2)
-  //
-  // However, for IEEE 754 encoding, we need the exponent to be a whole number,
-  // and most numbers aren't an even power of 2. For example:
-  //
-  //     > Math.log2(0.1)
-  //     -3.321928094887362
-  //     > Math.log2(2)
-  //     1
-  //     > Math.log2(3)
-  //     1.584962500721156
-  //     > Math.log2(4)
-  //     2
-  //
-  // We end up getting non-integer values. This is where the significand comes
-  // in. We need to ensure that the exponent is an integer, and then make the
-  // significand `s` where `1 <= s < 2`, and multiplying `pow(2, x)` by `s`
-  // gives us `v`. IEEE 754 also makes the whole part (the 1 in 1.23) implicit.
-  // So our updated formula for `x` must be:
-  //
-  //     x = floor(log10(v) / log10(2))
-  //
-  // And our formula for `s` is:
-  //
-  //     2^x * (1 + s) = v
-  //     s + 1 = v / 2^x
-  //     s + 1 = v * (1 / 2^x)
-  //     s + 1 = v * 2^-x
-  //     s = (v * 2^-x) - 1
-  //
-  //
-  // Exponent Bias
-  // -------------
-  //
-  // The exponent's range is limited by the number of bits available to it. In
-  // the case of a float64, the exponent has 11 bits, which gives us an unsigned
-  // maximum of:
-  //
-  //     > parseInt('11111111111', 2)
-  //     2047
-  //
-  // But the cases where all the bits are on or off for an exponent have special
-  // meaning (all bits off means it's zero or a denormalized number, all on
-  // means NaN or Infinity). This means that we need to leave the least
-  // significant bit unset for the maximum, which means our maximum and minimum
-  // unsigned ranges representable in a float64 exponent are:
-  //
-  //     > parseInt('11111111110', 2)
-  //     2046
-  //     > parseInt('00000000001', 2)
-  //     1
-  //
-  // But the exponent is signed. The IEEE 754 way to deal with this is to add a
-  // bias of half the maximum to the signed exponent to get it into the unsigned
-  // range, which means our *actual* signed exponent range for float64 is:
-  //
-  //     > bias = 2046 / 2
-  //     1023
-  //     > parseInt('11111111110', 2) - bias
-  //     1023
-  //     > parseInt('00000000001', 2) - bias
-  //     -1022
-  //
-  // Hope this helps make the code a little easier to grok.
-
   constructor({byteLength, numSignificandBits, roundTo}) {
     this.byteLength = byteLength;
     this.numSignificandBits = numSignificandBits;
@@ -286,8 +287,17 @@ export class FloatPolyfill {
       bytes, byteOffset, signed, biasedExponent, significand, littleEndian);
   }
 
-  // This function does just the byte encoding, after the float has been
-  // separated into the component parts required for IEEE-754 encoding.
+  /**
+  * This function does just the byte encoding, after the float has been
+  * separated into the component parts required for IEEE-754 encoding.
+  *
+  * @param {Array.<number>} bytes
+  * @param {number} byteOffset
+  * @param {number} signed
+  * @param {number} exponent
+  * @param {number} significand
+  * @param {boolean} littleEndian
+  */
   _floatPartsToByteArray(bytes, byteOffset, signed, exponent, significand,
                          littleEndian) {
     let i, increment;
@@ -390,8 +400,8 @@ export class IntegerPolyfill {
 }
 
 
-// These are some polyfills for the ArrayBuffer and DataView classes. Note that
-// they aren't complete polyfills, just enough for Jettison's needs.
+// These are some polyfills for the ArrayBuffer and DataView classes. Note
+// that they aren't complete polyfills, just enough for Jettison's needs.
 
 export class ArrayBufferPolyfill {
   constructor(length) {

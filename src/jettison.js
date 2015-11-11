@@ -22,17 +22,18 @@ if (_globals != null && _globals.ArrayBuffer != null &&
 export let _codecs = {};
 
 
-// These codecs are used as simple helpers for getting a value from or setting
-// a value on a StreamView object. They handle any clamping that needs to be
-// done on the value, and also handle advancing the StreamView's byteOffset.
-//
-// Codec, BooleanCodec, FloatCodec, and IntegerCodec all have fixed sizes. That
-// is, their byteLength is consistent regardless of the values being encoded.
-//
-// ArrayCodec and StringCodec both have dynamic sizes. Their byte length will
-// change depending on the values being encoded. For these codecs, you can get
-// the byte length by calling `getByteLength()`.
-
+/**
+* These codecs are used as simple helpers for getting a value from or setting
+* a value on a StreamView object. They handle any clamping that needs to be
+* done on the value, and also handle advancing the StreamView's byteOffset.
+*
+* Codec, BooleanCodec, FloatCodec, and IntegerCodec all have fixed sizes. That
+* is, their byteLength is consistent regardless of the values being encoded.
+*
+* ArrayCodec and StringCodec both have dynamic sizes. Their byte length will
+* change depending on the values being encoded. For these codecs, you can get
+* the byte length by calling `getByteLength()`.
+*/
 class Codec {
   constructor({byteLength, getter, setter}) {
     this.byteLength = byteLength;
@@ -64,9 +65,10 @@ class Codec {
 }
 
 
+/**
+* This is just like the uint8 codec, but get() returns true or false values.
+*/
 class BooleanCodec extends Codec {
-  // This is just like the uint8 codec, but get() returns true or false values.
-
   constructor() {
     super({byteLength: 1, getter: 'getUint8', setter: 'setUint8'});
   }
@@ -81,6 +83,10 @@ class BooleanCodec extends Codec {
 }
 
 
+/**
+* This encodes an array of booleans as a length and set of bitflags. get()
+* returns an array of booleans.
+*/
 class BooleanArrayCodec {
   constructor() {}
 
@@ -152,10 +158,12 @@ class BooleanArrayCodec {
 }
 
 
+/**
+* Encodes IEEE-754 floating point values. Only single and double precision
+* are supported. Note that single precision values will end up getting
+* rounded, because JavaScript only uses double precision.
+*/
 class FloatCodec extends Codec {
-  // Handles IEEE-754 floating point values. Only single and double precision
-  // are supported.
-
   constructor({byteLength}) {
     if (byteLength === 4) {
       super({
@@ -176,10 +184,12 @@ class FloatCodec extends Codec {
 }
 
 
+/**
+* Encodes integer values, both signed and unsigned. Note that set will clamp
+* values that are out of range for the given type (e.g. >= 127 becomes 127 for
+* a signed int8).
+*/
 class IntegerCodec extends Codec {
-  // Handles integer values. Note that set will clamp values that are out of
-  // range for the given type (e.g. >= 127 becomes 127 for a signed int8).
-
   constructor({byteLength, signed}) {
     const bitLength = byteLength * 8;
     let getter, setter, minValue, maxValue;
@@ -210,11 +220,12 @@ class IntegerCodec extends Codec {
 }
 
 
+/**
+* The array codec is a special case. It wraps a simple codec, but prefixes
+* it with a uint32 length value. It will first read the length, then read
+* than many of the values from the stream.
+*/
 class ArrayCodec {
-  // An array codec is a special case. It wraps a simple codec, but prefixes
-  // it with a uint32 length value. It will first read the length, then read
-  // than many of the values from the stream.
-
   constructor(valueCodec) {
     this.lengthCodec = _codecs.uint32;
     if (typeof valueCodec === 'string') {
@@ -272,15 +283,13 @@ class ArrayCodec {
   }
 }
 
-
+/**
+* The string codec is another special case. JavaScript strings are UTF-16,
+* which doesn't encode very efficiently for network traffic. The codec first
+* converts the strings to UTF-8, then converts that to a byte array. The
+* byte array is prefixed with the length of the UTF-8 string.
+*/
 class StringCodec {
-  // The string codec is another special case. JavaScript strings are UTF-16,
-  // which doesn't encode very efficiently for network traffic. The codec first
-  // converts the strings to UTF-8, then converts that to a byte array. The
-  // byte array is prefixed with the length of the UTF-8 string.
-  //
-  // FIXME: Could probably do this a bit more efficiently by encoding UTF-8
-  // ourselves instead of using encodeURIComponent.
 
   constructor() {
     this.lengthCodec = _codecs.uint32;
@@ -347,6 +356,10 @@ _codecs.booleanArray = new BooleanArrayCodec();
 _codecs.string = new StringCodec();
 
 
+/**
+* A stream view is an abstraction around a data view and array buffer for
+* reading and writing data while keeping track of a cursor position.
+*/
 class StreamView {
   constructor(dataView, arrayBuffer) {
     this.dataView = dataView;
@@ -371,12 +384,24 @@ class StreamView {
   }
 }
 
+/**
+* Create a new stream view.
+*
+* @param {number} byteLength Number of bytes to allocate for the view.
+* @returns {StreamView}
+*/
 StreamView.create = (byteLength) => {
   let arrayBuffer = new _config.ArrayBuffer(byteLength);
   let dataView = new _config.DataView(arrayBuffer);
   return new StreamView(dataView, arrayBuffer);
 };
 
+/**
+* Create a stream view from a string.
+*
+* @param {string} string A string of encoded data.
+* @returns {StreamView}
+*/
 StreamView.createFromString = (string) => {
   let codec = _codecs.uint8;
   let streamView = StreamView.create(string.length);
@@ -388,16 +413,22 @@ StreamView.createFromString = (string) => {
 };
 
 
-// Return true if the type is one of the allowed types.
+/**
+* Return true if the type is one of the allowed types.
+*
+* @param {string} type A type string, such as "array" or "uint8".
+* @returns {boolean}
+*/
 function isValidType(type) {
   return _codecs.hasOwnProperty(type) || type === 'array';
 }
 
 
+/**
+* Fields represent a single property in an object. These fields are grouped
+* into definition objects.
+*/
 class Field {
-  // Fields represent a single property in an object. These fields are grouped
-  // into definition objects.
-
   constructor({key, type, valueType}) {
     this.key = key;
     this.type = type;
@@ -420,11 +451,11 @@ class Field {
   }
 }
 
-
+/**
+* Definitions are a grouping of fields, and are used to encode or decode an
+* individual message. They can be grouped into schemas or used standalone.
+*/
 class Definition {
-  // Definitions are a grouping of fields, and are used to encode or decode an
-  // individual message. They can be grouped into schemas or used standalone.
-
   constructor(fields, {id, key, littleEndian, delta} = {}) {
     this.fields = fields;
     this.id = id;
@@ -432,6 +463,12 @@ class Definition {
     this.littleEndian = littleEndian;
   }
 
+  /**
+  * Calculate the number of bytes required to encode the given object.
+  *
+  * @param {Object} object The object to be encoded.
+  * @returns {number}
+  */
   getByteLength(object) {
     if (this.byteLength != null) {
       return this.byteLength;
@@ -454,6 +491,12 @@ class Definition {
     return byteLength;
   }
 
+  /**
+  * Read an object from the given stream.
+  *
+  * @param {StreamView} streamView
+  * @returns {Object}
+  */
   get(streamView) {
     let values = {};
     for (let i = 0, il = this.fields.length; i < il; i++) {
@@ -463,6 +506,12 @@ class Definition {
     return values;
   }
 
+  /**
+  * Write an object into the given stream.
+  *
+  * @param {StreamView} streamView
+  * @param {Object} object
+  */
   set(streamView, object) {
     for (let i = 0, il = this.fields.length; i < il; i++) {
       const {key, codec} = this.fields[i];
@@ -470,10 +519,22 @@ class Definition {
     }
   }
 
+  /**
+  * Read an object from the given string.
+  *
+  * @param {string} string
+  * @returns {Object}
+  */
   parse(string) {
     return this.get(StreamView.createFromString(string));
   }
 
+  /**
+  * Convert the given object into a string.
+  *
+  * @param {Object} object
+  * @returns {string}
+  */
   stringify(object) {
     let streamView = StreamView.create(this.getByteLength(object));
     this.set(streamView, object);
@@ -482,14 +543,15 @@ class Definition {
 }
 
 
+/**
+* A schema is a grouping of definitions. It allows you to encode packets
+* by name, in a way that can be decoded automatically by a matching schema
+* on the other end of a connection.
+*
+* Note that this assumes you won't have more than 255 packets, for now. If
+* you need more than that, you can pass an idType: option to the constructor.
+*/
 class Schema {
-  // A schema is a grouping of definitions. It allows you to encode packets
-  // by name, in a way that can be decoded automatically by a matching schema
-  // on the other end of a connection.
-  //
-  // Note that this assumes you won't have more than 255 packets, for now. If
-  // you need more than that, you can pass an idType: option to the constructor.
-
   constructor({idType} = {}) {
     this.definitions = {};
     this.definitionsById = {};
@@ -536,7 +598,14 @@ class Schema {
 }
 
 
-// Create a new Definition object.
+/**
+* Create a new Definition object.
+*
+* @param {Array.<{key: string, type: string, valueType: string}>} fields The
+*   fields that make up the definition. These will be converted into {Field}
+*   instances when constructing the definition.
+* @returns {Definition}
+*/
 export function define(fields) {
   return new Definition(fields.map((options) => {
     return new Field(options);
@@ -544,7 +613,9 @@ export function define(fields) {
 }
 
 
-// Create a new Schema object.
+/**
+* Create a new Schema object.
+*/
 export function createSchema() {
   return new Schema();
 }
