@@ -4,22 +4,22 @@ import * as utf8 from 'utf8';
 import * as polyfill from './polyfill.js';
 
 
-let config;
-let globals = typeof global != 'undefined' ? global : window;
-if (globals != null && globals.ArrayBuffer != null &&
-    globals.DataView != null) {
-  config = {
-    ArrayBuffer: globals.ArrayBuffer,
-    DataView: globals.DataView,
+export let _config;
+const _globals = typeof global != 'undefined' ? global : window;
+if (_globals != null && _globals.ArrayBuffer != null &&
+    _globals.DataView != null) {
+  _config = {
+    ArrayBuffer: _globals.ArrayBuffer,
+    DataView: _globals.DataView,
   };
 } else {
-  config = {
+  _config = {
     ArrayBuffer: polyfill.ArrayBufferPolyfill,
     DataView: polyfill.DataViewPolyfill,
   };
 }
 
-let codecs;
+export let _codecs = {};
 
 
 // These codecs are used as simple helpers for getting a value from or setting
@@ -89,7 +89,7 @@ class BooleanArrayCodec {
     const valueBytes = Math.ceil(length / 8);
     const lengthBits = Math.floor(polyfill.log2(length)) + 1;
     const lengthBytes = Math.max(Math.ceil(lengthBits / 7), 1);
-    return (lengthBytes + valueBytes) * codecs.uint8.byteLength;
+    return (lengthBytes + valueBytes) * _codecs.uint8.byteLength;
   }
 
   get(streamView, littleEndian) {
@@ -98,7 +98,7 @@ class BooleanArrayCodec {
     const byteLength = Math.ceil(length / 8);
     let i = 0;
     for (let byteIndex = 0; byteIndex < byteLength; byteIndex++) {
-      const byte = codecs.uint8.get(streamView, littleEndian);
+      const byte = _codecs.uint8.get(streamView, littleEndian);
       for (let bit = 0; bit < 8 && i < length; bit++, i++) {
         values.push(((byte >> bit) & 1) ? true : false);
       }
@@ -112,21 +112,21 @@ class BooleanArrayCodec {
     let byte = 0, bit = 0;
     for (let i = 0; i < length; i++, bit++) {
       if (bit === 8) {
-        codecs.uint8.set(streamView, byte, littleEndian);
+        _codecs.uint8.set(streamView, byte, littleEndian);
         byte = 0;
         bit = 0;
       }
       byte |= (values[i] ? 1 : 0) << bit;
     }
     if (bit > 0) {
-      codecs.uint8.set(streamView, byte, littleEndian);
+      _codecs.uint8.set(streamView, byte, littleEndian);
     }
   }
 
   _getLength(streamView, littleEndian) {
     let length = 0;
     for (let i = 0, byte = 128; (byte & 128) !== 0; i++) {
-      byte = codecs.uint8.get(streamView, littleEndian);
+      byte = _codecs.uint8.get(streamView, littleEndian);
       length |= (byte & 127) << (i * 7);
     }
     return length;
@@ -134,7 +134,7 @@ class BooleanArrayCodec {
 
   _setLength(streamView, length, littleEndian) {
     if (length === 0) {
-      codecs.uint8.set(streamView, 0, littleEndian);
+      _codecs.uint8.set(streamView, 0, littleEndian);
       return;
     }
     let remainder = length;
@@ -146,7 +146,7 @@ class BooleanArrayCodec {
         // another length byte by setting the high bit.
         byte |= 128;
       }
-      codecs.uint8.set(streamView, byte, littleEndian);
+      _codecs.uint8.set(streamView, byte, littleEndian);
     }
   }
 }
@@ -216,9 +216,9 @@ class ArrayCodec {
   // than many of the values from the stream.
 
   constructor(valueCodec) {
-    this.lengthCodec = codecs.uint32;
+    this.lengthCodec = _codecs.uint32;
     if (typeof valueCodec === 'string') {
-      this.valueCodec = codecs[valueCodec];
+      this.valueCodec = _codecs[valueCodec];
       if (!this.valueCodec) {
         throw new Error(`Invalid array value type '${valueCodec}'`);
       }
@@ -283,8 +283,8 @@ class StringCodec {
   // ourselves instead of using encodeURIComponent.
 
   constructor() {
-    this.lengthCodec = codecs.uint32;
-    this.valueCodec = codecs.uint8;
+    this.lengthCodec = _codecs.uint32;
+    this.valueCodec = _codecs.uint8;
   }
 
   getByteLength(value) {
@@ -332,23 +332,19 @@ class StringCodec {
 // into an array of bytes, and to convert those bytes back into values. Note
 // that the "array" type does not have a codec in this object, because
 // ArrayCodec objects are created on the fly as needed.
-
-codecs = {
-  boolean: new BooleanCodec(),
-  float32: new FloatCodec({byteLength: 4}),
-  float64: new FloatCodec({byteLength: 8}),
-  int8: new IntegerCodec({byteLength: 1, signed: true}),
-  int16: new IntegerCodec({byteLength: 2, signed: true}),
-  int32: new IntegerCodec({byteLength: 4, signed: true}),
-  uint8: new IntegerCodec({byteLength: 1, signed: false}),
-  uint16: new IntegerCodec({byteLength: 2, signed: false}),
-  uint32: new IntegerCodec({byteLength: 4, signed: false}),
-};
-
+_codecs.boolean = new BooleanCodec();
+_codecs.float32 = new FloatCodec({byteLength: 4});
+_codecs.float64 = new FloatCodec({byteLength: 8});
+_codecs.int8 = new IntegerCodec({byteLength: 1, signed: true});
+_codecs.int16 = new IntegerCodec({byteLength: 2, signed: true});
+_codecs.int32 = new IntegerCodec({byteLength: 4, signed: true});
+_codecs.uint8 = new IntegerCodec({byteLength: 1, signed: false});
+_codecs.uint16 = new IntegerCodec({byteLength: 2, signed: false});
+_codecs.uint32 = new IntegerCodec({byteLength: 4, signed: false});
 
 // Create these last, because they refer to the other codecs internally.
-codecs.booleanArray = new BooleanArrayCodec();
-codecs.string = new StringCodec();
+_codecs.booleanArray = new BooleanArrayCodec();
+_codecs.string = new StringCodec();
 
 
 class StreamView {
@@ -376,13 +372,13 @@ class StreamView {
 }
 
 StreamView.create = (byteLength) => {
-  let arrayBuffer = new config.ArrayBuffer(byteLength);
-  let dataView = new config.DataView(arrayBuffer);
+  let arrayBuffer = new _config.ArrayBuffer(byteLength);
+  let dataView = new _config.DataView(arrayBuffer);
   return new StreamView(dataView, arrayBuffer);
 };
 
 StreamView.createFromString = (string) => {
-  let codec = codecs.uint8;
+  let codec = _codecs.uint8;
   let streamView = StreamView.create(string.length);
   for (let i = 0, il = string.length; i < il; i++) {
     codec.set(streamView, string.charCodeAt(i));
@@ -394,23 +390,7 @@ StreamView.createFromString = (string) => {
 
 // Return true if the type is one of the allowed types.
 function isValidType(type) {
-  switch (type) {
-    case 'array':
-    case 'string':
-    case 'boolean':
-    case 'booleanArray':
-    case 'int8':
-    case 'int16':
-    case 'int32':
-    case 'uint8':
-    case 'uint16':
-    case 'uint32':
-    case 'float32':
-    case 'float64':
-      return true;
-    default:
-      return false;
-  }
+  return _codecs.hasOwnProperty(type) || type === 'array';
 }
 
 
@@ -435,7 +415,7 @@ class Field {
       }
       this.codec = new ArrayCodec(this.valueType);
     } else {
-      this.codec = codecs[this.type];
+      this.codec = _codecs[this.type];
     }
   }
 }
@@ -529,7 +509,7 @@ class Schema {
 
   parse(string) {
     let streamView = StreamView.createFromString(string);
-    let idCodec = codecs[this.idType];
+    let idCodec = _codecs[this.idType];
     let id = idCodec.get(streamView);
     let definition = this.definitionsById[id];
     if (definition == null) {
@@ -546,7 +526,7 @@ class Schema {
     if (definition == null) {
       throw new Error(`'${key}' is not defined in schema`);
     }
-    let idCodec = codecs[this.idType];
+    let idCodec = _codecs[this.idType];
     let streamView = StreamView.create(idCodec.byteLength +
                                        definition.getByteLength(object));
     idCodec.set(streamView, definition.id);
@@ -570,7 +550,5 @@ export function createSchema() {
 }
 
 
-export var _codecs = codecs;
-export var _config = config;
 export var _polyfill = polyfill;
 export var _StreamView = StreamView;
