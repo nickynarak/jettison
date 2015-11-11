@@ -204,11 +204,11 @@ function describeJettison({withPolyfills}={}) {
       let codec = jettison._codecs.string;
       expect(codec).to.exist;
       let streamView = StreamView.create(codec.getByteLength('hodør'));
-      expect(streamView.arrayBuffer.byteLength).to.equal(10);
+      expect(streamView.arrayBuffer.byteLength).to.equal(7);
       codec.set(streamView, 'hodør', false);
-      expect(streamView.byteOffset).to.equal(10);
+      expect(streamView.byteOffset).to.equal(7);
       expect(streamView.toArray()).to.deep.equal([
-        0, 0, 0, 6, 104, 111, 100, 195, 184, 114]);
+        6, 104, 111, 100, 195, 184, 114]);
       streamView.byteOffset = 0;
       let unpacked = codec.get(streamView, false);
       expect(unpacked).to.equal('hodør');

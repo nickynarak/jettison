@@ -66,6 +66,70 @@ class Codec {
 
 
 /**
+* The array codec is a special case. It wraps another codec, but prefixes
+* it with a uint32 length value. It will first read the length, then read
+* than many of the values from the stream.
+*/
+class ArrayCodec {
+  constructor(valueCodec) {
+    this.lengthCodec = _codecs.uint32;
+    if (typeof valueCodec === 'string') {
+      this.valueCodec = _codecs[valueCodec];
+      if (!this.valueCodec) {
+        throw new Error(`Invalid array value type '${valueCodec}'`);
+      }
+    } else {
+      this.valueCodec = valueCodec;
+    }
+  }
+
+  getByteLength(values) {
+    if (!values || !values.length) {
+      return 0;
+    }
+    if (this.valueCodec.byteLength != null) {
+      // The value codec has a fixed byte length.
+      return (this.lengthCodec.byteLength +
+              (values.length * this.valueCodec.byteLength));
+    } else {
+      // The value codec has a dynamic byte lenth (e.g. an array of strings of
+      // different lengths), so we need to get the size of each value on
+      // the fly.
+      let byteLength = this.lengthCodec.byteLength;
+      for (let i = 0, il = values.length; i < il; i++) {
+        byteLength += this.valueCodec.getByteLength(values[i]);
+      }
+      return byteLength;
+    }
+  }
+
+  get(streamView, littleEndian) {
+    // First read the number of elements, then read the elements
+    const length = this.lengthCodec.get(streamView, littleEndian);
+    if (length > 0) {
+      let values = new Array(length);
+      for (let index = 0; index < length; index++) {
+        values[index] = this.valueCodec.get(streamView, littleEndian);
+      }
+      return values;
+    } else {
+      return [];
+    }
+  }
+
+  set(streamView, values, littleEndian) {
+    const length = (values && values.length) || 0;
+    this.lengthCodec.set(streamView, length, littleEndian);
+    if (length > 0) {
+      for (let i = 0, il = values.length; i < il; i++) {
+        this.valueCodec.set(streamView, values[i], littleEndian);
+      }
+    }
+  }
+}
+
+
+/**
 * This is just like the uint8 codec, but get() returns true or false values.
 */
 class BooleanCodec extends Codec {
@@ -88,19 +152,16 @@ class BooleanCodec extends Codec {
 * returns an array of booleans.
 */
 class BooleanArrayCodec {
-  constructor() {}
-
   getByteLength(values) {
     const length = (values && values.length) || 0;
     const valueBytes = Math.ceil(length / 8);
-    const lengthBits = Math.floor(polyfill.log2(length)) + 1;
-    const lengthBytes = Math.max(Math.ceil(lengthBits / 7), 1);
-    return (lengthBytes + valueBytes) * _codecs.uint8.byteLength;
+    return (_codecs.variableLength.getByteLength(length) +
+            (valueBytes * _codecs.uint8.byteLength));
   }
 
   get(streamView, littleEndian) {
     let values = [];
-    const length = this._getLength(streamView, littleEndian);
+    const length = _codecs.variableLength.get(streamView, littleEndian);
     const byteLength = Math.ceil(length / 8);
     let i = 0;
     for (let byteIndex = 0; byteIndex < byteLength; byteIndex++) {
@@ -114,7 +175,7 @@ class BooleanArrayCodec {
 
   set(streamView, values, littleEndian) {
     const length = (values && values.length) || 0;
-    this._setLength(streamView, length, littleEndian);
+    _codecs.variableLength.set(streamView, length, littleEndian);
     let byte = 0, bit = 0;
     for (let i = 0; i < length; i++, bit++) {
       if (bit === 8) {
@@ -125,33 +186,6 @@ class BooleanArrayCodec {
       byte |= (values[i] ? 1 : 0) << bit;
     }
     if (bit > 0) {
-      _codecs.uint8.set(streamView, byte, littleEndian);
-    }
-  }
-
-  _getLength(streamView, littleEndian) {
-    let length = 0;
-    for (let i = 0, byte = 128; (byte & 128) !== 0; i++) {
-      byte = _codecs.uint8.get(streamView, littleEndian);
-      length |= (byte & 127) << (i * 7);
-    }
-    return length;
-  }
-
-  _setLength(streamView, length, littleEndian) {
-    if (length === 0) {
-      _codecs.uint8.set(streamView, 0, littleEndian);
-      return;
-    }
-    let remainder = length;
-    while (remainder > 0) {
-      let byte = remainder & 127;
-      remainder >>= 7;
-      if (remainder) {
-        // There are still bits left, so indicate that the stream will have
-        // another length byte by setting the high bit.
-        byte |= 128;
-      }
       _codecs.uint8.set(streamView, byte, littleEndian);
     }
   }
@@ -221,98 +255,31 @@ class IntegerCodec extends Codec {
 
 
 /**
-* The array codec is a special case. It wraps a simple codec, but prefixes
-* it with a uint32 length value. It will first read the length, then read
-* than many of the values from the stream.
-*/
-class ArrayCodec {
-  constructor(valueCodec) {
-    this.lengthCodec = _codecs.uint32;
-    if (typeof valueCodec === 'string') {
-      this.valueCodec = _codecs[valueCodec];
-      if (!this.valueCodec) {
-        throw new Error(`Invalid array value type '${valueCodec}'`);
-      }
-    } else {
-      this.valueCodec = valueCodec;
-    }
-  }
-
-  getByteLength(values) {
-    if (!values || !values.length) {
-      return 0;
-    }
-    if (this.valueCodec.byteLength != null) {
-      // The value codec has a fixed byte length.
-      return (this.lengthCodec.byteLength +
-              (values.length * this.valueCodec.byteLength));
-    } else {
-      // The value codec has a dynamic byte lenth (e.g. an array of strings of
-      // different lengths), so we need to get the size of each value on
-      // the fly.
-      let byteLength = this.lengthCodec.byteLength;
-      for (let i = 0, il = values.length; i < il; i++) {
-        byteLength += this.valueCodec.getByteLength(values[i]);
-      }
-      return byteLength;
-    }
-  }
-
-  get(streamView, littleEndian) {
-    // First read the number of elements, then read the elements
-    const length = this.lengthCodec.get(streamView, littleEndian);
-    if (length > 0) {
-      let values = new Array(length);
-      for (let index = 0; index < length; index++) {
-        values[index] = this.valueCodec.get(streamView, littleEndian);
-      }
-      return values;
-    } else {
-      return [];
-    }
-  }
-
-  set(streamView, values, littleEndian) {
-    const length = (values && values.length) || 0;
-    this.lengthCodec.set(streamView, length, littleEndian);
-    if (length > 0) {
-      for (let i = 0, il = values.length; i < il; i++) {
-        this.valueCodec.set(streamView, values[i], littleEndian);
-      }
-    }
-  }
-}
-
-/**
 * The string codec is another special case. JavaScript strings are UTF-16,
 * which doesn't encode very efficiently for network traffic. The codec first
 * converts the strings to UTF-8, then converts that to a byte array. The
 * byte array is prefixed with the length of the UTF-8 string.
 */
 class StringCodec {
-
-  constructor() {
-    this.lengthCodec = _codecs.uint32;
-    this.valueCodec = _codecs.uint8;
-  }
-
   getByteLength(value) {
-    // FIXME: This sucks, shouldn't need to encode strings twice.
     if (value) {
+      // FIXME: This sucks, shouldn't need to encode strings twice.
       value = utf8.encode(value);
+      return (_codecs.variableLength.getByteLength(value.length) +
+              (_codecs.uint8.byteLength * value.length));
+    } else {
+      return _codecs.variableLength.getByteLength(0);
     }
-    return (this.lengthCodec.byteLength +
-            (this.valueCodec.byteLength * value.length));
   }
 
   get(streamView, littleEndian) {
     // First read the number of characters, then the characters
-    let length = this.lengthCodec.get(streamView, littleEndian);
+    let length = _codecs.variableLength.get(streamView, littleEndian);
     if (length > 0) {
       let string = '';
       for (let i = 0; i < length; i++) {
         string += String.fromCharCode(
-          this.valueCodec.get(streamView, littleEndian));
+          _codecs.uint8.get(streamView, littleEndian));
       }
       // The string is in UTF-8 format, convert it back to UTF-16
       return utf8.decode(string);
@@ -325,13 +292,58 @@ class StringCodec {
     if (value) {
       // Convert the string to UTF-8 to save space
       const utf8String = utf8.encode(value);
-      this.lengthCodec.set(streamView, utf8String.length, littleEndian);
+      _codecs.variableLength.set(streamView, utf8String.length, littleEndian);
       for (let i = 0; i < utf8String.length; i++) {
-        this.valueCodec.set(streamView, utf8String.charCodeAt(i), littleEndian);
+        _codecs.uint8.set(streamView, utf8String.charCodeAt(i), littleEndian);
       }
     } else {
       // Undefined or empty string, just send a zero length
-      this.lengthCodec.set(streamView, 0, littleEndian);
+      _codecs.variableLength.set(streamView, 0, littleEndian);
+    }
+  }
+}
+
+
+/**
+* This is a variable length unsigned integer used to read and write lengths
+* of arrays. In the worst case scenario of a very high length, it will use an
+* extra byte, but in most cases it will use less.
+*
+* This is encoded by using the 7 lower bits to represent the length, and the
+* high 8th bit to indicate whether there is another byte to read.
+*/
+class VariableLengthUnsignedIntegerCodec {
+  getByteLength(value) {
+    const bits = Math.floor(polyfill.log2(value)) + 1;
+    const bytes = Math.max(Math.ceil(bits / 7), 1);
+    let byteLength = bytes * _codecs.uint8.byteLength;
+    return byteLength;
+  }
+
+  get(streamView, littleEndian) {
+    let length = 0;
+    for (let i = 0, byte = 128; (byte & 128) !== 0; i++) {
+      byte = _codecs.uint8.get(streamView, littleEndian);
+      length |= (byte & 127) << (i * 7);
+    }
+    return length;
+  }
+
+  set(streamView, value, littleEndian) {
+    if (!value) {
+      _codecs.uint8.set(streamView, 0, littleEndian);
+      return;
+    }
+    let remainder = value;
+    while (remainder > 0) {
+      let byte = remainder & 127;
+      remainder >>= 7;
+      if (remainder) {
+        // There are still bits left, so indicate that the stream will have
+        // another length byte by setting the high bit.
+        byte |= 128;
+      }
+      _codecs.uint8.set(streamView, byte, littleEndian);
     }
   }
 }
@@ -342,18 +354,17 @@ class StringCodec {
 // that the "array" type does not have a codec in this object, because
 // ArrayCodec objects are created on the fly as needed.
 _codecs.boolean = new BooleanCodec();
+_codecs.booleanArray = new BooleanArrayCodec();
 _codecs.float32 = new FloatCodec({byteLength: 4});
 _codecs.float64 = new FloatCodec({byteLength: 8});
 _codecs.int8 = new IntegerCodec({byteLength: 1, signed: true});
 _codecs.int16 = new IntegerCodec({byteLength: 2, signed: true});
 _codecs.int32 = new IntegerCodec({byteLength: 4, signed: true});
+_codecs.string = new StringCodec();
 _codecs.uint8 = new IntegerCodec({byteLength: 1, signed: false});
 _codecs.uint16 = new IntegerCodec({byteLength: 2, signed: false});
 _codecs.uint32 = new IntegerCodec({byteLength: 4, signed: false});
-
-// Create these last, because they refer to the other codecs internally.
-_codecs.booleanArray = new BooleanArrayCodec();
-_codecs.string = new StringCodec();
+_codecs.variableLength = new VariableLengthUnsignedIntegerCodec();
 
 
 /**
@@ -456,7 +467,7 @@ class Field {
 * individual message. They can be grouped into schemas or used standalone.
 */
 class Definition {
-  constructor(fields, {id, key, littleEndian, delta} = {}) {
+  constructor(fields, {id, key, littleEndian} = {}) {
     this.fields = fields;
     this.id = id;
     this.key = key;
