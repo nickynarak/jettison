@@ -6,7 +6,7 @@
 // aren't 100% compatible with the real things -- just good enough for the
 // needs of Jettison.
 
-let log2 = Math.log2 || ((value) => {
+export let log2 = Math.log2 || ((value) => {
   return Math.log(value) / Math.LN2;
 });
 
@@ -165,8 +165,8 @@ export class FloatPolyfill {
 
     // For the first byte, the high bit is the signed bit.
     // The rest is part of the exponent.
-    let signedAndExponent = bytes[byteOffset + i];
-    let signed = (signedAndExponent >> 7);
+    const signedAndExponent = bytes[byteOffset + i];
+    const signed = (signedAndExponent >> 7);
     let exponent = signedAndExponent & 127;
     i += increment;
 
@@ -353,7 +353,7 @@ export class IntegerPolyfill {
     }
     let value = 0;
     let scale = 1;
-    let stop = i + (increment * this.byteLength);
+    const stop = i + (increment * this.byteLength);
     while (i !== stop) {
       value += bytes[byteOffset + i] * scale;
       i += increment;
@@ -379,7 +379,7 @@ export class IntegerPolyfill {
     } else if (value > this.maxValue) {
       value = this.maxValue;
     }
-    let stop = i + (increment * this.byteLength);
+    const stop = i + (increment * this.byteLength);
     while (i != stop) {
       bytes[byteOffset + i] = value & 255;
       i += increment;

@@ -50,8 +50,8 @@ class Codec {
   }
 
   get(streamView, littleEndian) {
-    let value = streamView.dataView[this.getter](streamView.byteOffset,
-                                                 littleEndian);
+    const value = streamView.dataView[this.getter](streamView.byteOffset,
+                                                   littleEndian);
     streamView.byteOffset += this.byteLength;
     return value;
   }
@@ -77,6 +77,77 @@ class BooleanCodec extends Codec {
 
   set(streamView, value, littleEndian) {
     super.set(streamView, value ? 1 : 0, littleEndian);
+  }
+}
+
+
+class BooleanArrayCodec {
+  constructor() {}
+
+  getByteLength(values) {
+    const length = (values && values.length) || 0;
+    const valueBytes = Math.ceil(length / 8);
+    const lengthBits = Math.floor(polyfill.log2(length)) + 1;
+    const lengthBytes = Math.max(Math.ceil(lengthBits / 7), 1);
+    return (lengthBytes + valueBytes) * codecs.uint8.byteLength;
+  }
+
+  get(streamView, littleEndian) {
+    let values = [];
+    const length = this._getLength(streamView, littleEndian);
+    const byteLength = Math.ceil(length / 8);
+    let i = 0;
+    for (let byteIndex = 0; byteIndex < byteLength; byteIndex++) {
+      const byte = codecs.uint8.get(streamView, littleEndian);
+      for (let bit = 0; bit < 8 && i < length; bit++, i++) {
+        values.push(((byte >> bit) & 1) ? true : false);
+      }
+    }
+    return values;
+  }
+
+  set(streamView, values, littleEndian) {
+    const length = (values && values.length) || 0;
+    this._setLength(streamView, length, littleEndian);
+    let byte = 0, bit = 0;
+    for (let i = 0; i < length; i++, bit++) {
+      if (bit === 8) {
+        codecs.uint8.set(streamView, byte, littleEndian);
+        byte = 0;
+        bit = 0;
+      }
+      byte |= (values[i] ? 1 : 0) << bit;
+    }
+    if (bit > 0) {
+      codecs.uint8.set(streamView, byte, littleEndian);
+    }
+  }
+
+  _getLength(streamView, littleEndian) {
+    let length = 0;
+    for (let i = 0, byte = 128; (byte & 128) !== 0; i++) {
+      byte = codecs.uint8.get(streamView, littleEndian);
+      length |= (byte & 127) << (i * 7);
+    }
+    return length;
+  }
+
+  _setLength(streamView, length, littleEndian) {
+    if (length === 0) {
+      codecs.uint8.set(streamView, 0, littleEndian);
+      return;
+    }
+    let remainder = length;
+    while (remainder > 0) {
+      let byte = remainder & 127;
+      remainder >>= 7;
+      if (remainder) {
+        // There are still bits left, so indicate that the stream will have
+        // another length byte by setting the high bit.
+        byte |= 128;
+      }
+      codecs.uint8.set(streamView, byte, littleEndian);
+    }
   }
 }
 
@@ -110,7 +181,7 @@ class IntegerCodec extends Codec {
   // range for the given type (e.g. >= 127 becomes 127 for a signed int8).
 
   constructor({byteLength, signed}) {
-    let bitLength = byteLength * 8;
+    const bitLength = byteLength * 8;
     let getter, setter, minValue, maxValue;
     if (signed) {
       minValue = -Math.pow(2, bitLength - 1);
@@ -178,7 +249,7 @@ class ArrayCodec {
 
   get(streamView, littleEndian) {
     // First read the number of elements, then read the elements
-    let length = this.lengthCodec.get(streamView, littleEndian);
+    const length = this.lengthCodec.get(streamView, littleEndian);
     if (length > 0) {
       let values = new Array(length);
       for (let index = 0; index < length; index++) {
@@ -191,7 +262,7 @@ class ArrayCodec {
   }
 
   set(streamView, values, littleEndian) {
-    let length = (values && values.length) || 0;
+    const length = (values && values.length) || 0;
     this.lengthCodec.set(streamView, length, littleEndian);
     if (length > 0) {
       for (let i = 0, il = values.length; i < il; i++) {
@@ -244,7 +315,7 @@ class StringCodec {
   set(streamView, value, littleEndian) {
     if (value) {
       // Convert the string to UTF-8 to save space
-      let utf8String = utf8.encode(value);
+      const utf8String = utf8.encode(value);
       this.lengthCodec.set(streamView, utf8String.length, littleEndian);
       for (let i = 0; i < utf8String.length; i++) {
         this.valueCodec.set(streamView, utf8String.charCodeAt(i), littleEndian);
@@ -275,8 +346,8 @@ codecs = {
 };
 
 
-// Create this last, because it refers to the uint32 and uint8
-// codecs internally.
+// Create these last, because they refer to the other codecs internally.
+codecs.booleanArray = new BooleanArrayCodec();
 codecs.string = new StringCodec();
 
 
@@ -327,6 +398,7 @@ function isValidType(type) {
     case 'array':
     case 'string':
     case 'boolean':
+    case 'booleanArray':
     case 'int8':
     case 'int16':
     case 'int32':
@@ -373,7 +445,7 @@ class Definition {
   // Definitions are a grouping of fields, and are used to encode or decode an
   // individual message. They can be grouped into schemas or used standalone.
 
-  constructor(fields, {id, key, littleEndian} = {}) {
+  constructor(fields, {id, key, littleEndian, delta} = {}) {
     this.fields = fields;
     this.id = id;
     this.key = key;
@@ -387,7 +459,7 @@ class Definition {
     let byteLength = 0;
     let fixedByteLength = true;
     for (let i = 0, il = this.fields.length; i < il; i++) {
-      let {key, codec} = this.fields[i];
+      const {key, codec} = this.fields[i];
       if (codec.byteLength != null) {
         byteLength += codec.byteLength;
       } else {
@@ -405,7 +477,7 @@ class Definition {
   get(streamView) {
     let values = {};
     for (let i = 0, il = this.fields.length; i < il; i++) {
-      let {key, codec} = this.fields[i];
+      const {key, codec} = this.fields[i];
       values[key] = codec.get(streamView, this.littleEndian);
     }
     return values;
@@ -413,7 +485,7 @@ class Definition {
 
   set(streamView, object) {
     for (let i = 0, il = this.fields.length; i < il; i++) {
-      let {key, codec} = this.fields[i];
+      const {key, codec} = this.fields[i];
       codec.set(streamView, object[key], this.littleEndian);
     }
   }
@@ -446,7 +518,7 @@ class Schema {
   }
 
   define(key, fields) {
-    let id = this.nextDefinitionId++;
+    const id = this.nextDefinitionId++;
     let definition = new Definition(fields.map((options) => {
       return new Field(options);
     }), {id: id, key: key});

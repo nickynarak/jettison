@@ -31,9 +31,11 @@ function describeJettison({withPolyfills}={}) {
     function testEndianCodec(codec, inValue, expectedBytes, expectedOutValue,
                              littleEndian)
     {
-      let streamView = StreamView.create(codec.byteLength);
+      let expectedByteLength = (codec.byteLength != null ? codec.byteLength :
+                                codec.getByteLength(inValue));
+      let streamView = StreamView.create(expectedByteLength);
       codec.set(streamView, inValue, littleEndian);
-      expect(streamView.byteOffset).to.equal(codec.byteLength);
+      expect(streamView.byteOffset).to.equal(expectedByteLength);
       let bytes = streamView.toArray();
       if (littleEndian) {
         expectedBytes = expectedBytes.slice().reverse();
@@ -47,6 +49,8 @@ function describeJettison({withPolyfills}={}) {
           .to.be.lessThan(expectedOutValue.epsilon);
       } else if (isNaN(expectedOutValue)) {
         expect(isNaN(outValue)).to.be.true;
+      } else if (expectedOutValue instanceof Array) {
+        expect(outValue).to.deep.equal(expectedOutValue);
       } else {
         expect(outValue).to.equal(expectedOutValue);
       }
@@ -61,6 +65,33 @@ function describeJettison({withPolyfills}={}) {
       let codec = jettison._codecs.boolean;
       testCodec(codec, false, [0], false);
       testCodec(codec, true, [1], true);
+    });
+
+    it('should convert boolean array values', () => {
+      let codec = jettison._codecs.booleanArray;
+      const f = false;
+      const t = true;
+      // Don't bother testing the little endian version, as this is all bytes
+      // and the endian type doesn't matter.
+      testEndianCodec(codec, [], [0], []);
+      testEndianCodec(codec, [f], [1, 0], [f]);
+      testEndianCodec(codec, [t], [1, 1], [t]);
+      testEndianCodec(codec, [t, t, t, t, t, t, t, f], [8, 127],
+                      [t, t, t, t, t, t, t, f]);
+      let bigBooleanArray = [];
+      for (let i = 0; i < 255; i++) {
+        bigBooleanArray.push(true);
+      }
+      let expectedBytes = [
+        // First the length
+        255, 1,
+        // Then the 255 bits (32 bytes)
+        255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 127,
+      ];
+      testEndianCodec(codec, bigBooleanArray, expectedBytes, bigBooleanArray);
     });
 
     it('should convert int8 values', () => {
@@ -199,6 +230,7 @@ function describeJettison({withPolyfills}={}) {
         {key: 'x', type: 'float64'},
         {key: 'y', type: 'float64'},
         {key: 'points', type: 'array', valueType: 'float64'},
+        {key: 'flags', type: 'booleanArray'},
         {key: 'health', type: 'int16'},
       ]);
       let expectedValue = {
@@ -206,6 +238,7 @@ function describeJettison({withPolyfills}={}) {
         x: 0.5,
         y: 1.5,
         points: [0.1, 0.2, 0.3, 0.4],
+        flags: [true, false, true],
         health: 100,
       };
       let streamView = StreamView.create(definition.getByteLength(expectedValue));
@@ -226,6 +259,7 @@ function describeJettison({withPolyfills}={}) {
           63, 201, 153, 153, 153, 153, 153, 154,
           63, 211, 51, 51, 51, 51, 51, 51,
           63, 217, 153, 153, 153, 153, 153, 154,
+          3, 5,
           0, 100,
         ]);
       });
@@ -252,6 +286,7 @@ function describeJettison({withPolyfills}={}) {
         {key: 'x', type: 'float64'},
         {key: 'y', type: 'float64'},
         {key: 'points', type: 'array', valueType: 'float64'},
+        {key: 'flags', type: 'booleanArray'},
       ]);
       schema.define('position', [
         {key: 'id', type: 'int32'},
@@ -267,6 +302,7 @@ function describeJettison({withPolyfills}={}) {
             x: 0.5,
             y: 1.5,
             points: [-0.1, 0.2, -0.3, 0.4],
+            flags: [true, false, true],
           },
         };
         let string = schema.stringify(expectedValue.key, expectedValue.data);
