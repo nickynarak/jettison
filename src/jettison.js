@@ -20,22 +20,24 @@ if (_globals != null && _globals.ArrayBuffer != null &&
 }
 
 export let _codecs = {};
+export let _codecTypes = {};
 
 
 /**
-* These codecs are used as simple helpers for getting a value from or setting
-* a value on a StreamView object. They handle any clamping that needs to be
+* Codecs are used as simple helpers for reading a value from or writing
+* a value to a StreamView object. They handle any clamping that needs to be
 * done on the value, and also handle advancing the StreamView's byteOffset.
 *
 * Codec, BooleanCodec, FloatCodec, and IntegerCodec all have fixed sizes. That
 * is, their byteLength is consistent regardless of the values being encoded.
 *
-* ArrayCodec and StringCodec both have dynamic sizes. Their byte length will
-* change depending on the values being encoded. For these codecs, you can get
-* the byte length by calling `getByteLength()`.
+* Other codecs (such as ArrayCodec and StringCodec) have dynamic sizes. Their
+* byte length will change depending on the values being encoded. For these
+* codecs, you can get the byte length by calling `getByteLength()`.
 */
-class Codec {
+class FixedLengthCodec {
   constructor({byteLength, getter, setter}) {
+    this.fixedByteLength = true;
     this.byteLength = byteLength;
     this.getter = getter;
     this.setter = setter;
@@ -48,6 +50,10 @@ class Codec {
     if (polyfill.DataViewPolyfill.prototype[this.setter] == null) {
       throw new Error(`setter '${this.setter}' must be a DataView method`);
     }
+  }
+
+  getByteLength(value) {
+    return this.byteLength;
   }
 
   get(streamView, littleEndian) {
@@ -72,22 +78,19 @@ class Codec {
 */
 class ArrayCodec {
   constructor(valueCodec) {
-    if (typeof valueCodec === 'string') {
-      this.valueCodec = _codecs[valueCodec];
-      if (!this.valueCodec) {
-        throw new Error(`Invalid array value type '${valueCodec}'`);
-      }
-    } else {
-      this.valueCodec = valueCodec;
+    this.valueCodec = (typeof valueCodec === 'string' ?
+                       _codecs[valueCodec] : valueCodec);
+    if (!this.valueCodec) {
+      throw new Error(`Invalid array value type '${valueCodec}'`);
     }
   }
 
   getByteLength(values) {
     const length = (values && values.length) || 0;
     let valueByteLength;
-    if (this.valueCodec.byteLength) {
+    if (this.valueCodec.fixedByteLength) {
       // The value codec has a fixed byte length.
-      valueByteLength = length * this.valueCodec.byteLength;
+      valueByteLength = length * this.valueCodec.getByteLength();
     } else {
       // The value codec has a dynamic byte length (e.g. an array of strings
       // of different lengths), so we need to get the size of each value on
@@ -129,7 +132,7 @@ class ArrayCodec {
 /**
 * This is just like the uint8 codec, but get() returns true or false values.
 */
-class BooleanCodec extends Codec {
+class BooleanCodec extends FixedLengthCodec {
   constructor() {
     super({byteLength: 1, getter: 'getUint8', setter: 'setUint8'});
   }
@@ -194,7 +197,7 @@ class BooleanArrayCodec {
 * are supported. Note that single precision values will end up getting
 * rounded, because JavaScript only uses double precision.
 */
-class FloatCodec extends Codec {
+class FloatCodec extends FixedLengthCodec {
   constructor({byteLength}) {
     if (byteLength === 4) {
       super({
@@ -220,7 +223,7 @@ class FloatCodec extends Codec {
 * values that are out of range for the given type (e.g. >= 127 becomes 127 for
 * a signed int8).
 */
-class IntegerCodec extends Codec {
+class IntegerCodec extends FixedLengthCodec {
   constructor({byteLength, signed}) {
     const bitLength = byteLength * 8;
     let getter, setter, minValue, maxValue;
@@ -247,6 +250,72 @@ class IntegerCodec extends Codec {
       value = this.maxValue;
     }
     super.set(streamView, value, littleEndian);
+  }
+}
+
+
+class ObjectCodec {
+  /**
+  * @param Array.<{key: string, type: string, valueType: string}>} fields
+  *   The fields that make up the object. These will be converted into
+  *   {Field} instances.
+  */
+  constructor(fields) {
+    this.fields = fields.map((options) => {
+      return new Field(options);
+    });
+  }
+
+  /**
+  * Calculate the number of bytes required to encode the given object.
+  *
+  * @param {Object} object The object to be encoded.
+  * @returns {number}
+  */
+  getByteLength(object) {
+    if (this.byteLength != null) {
+      return this.byteLength;
+    }
+    let byteLength = 0;
+    let fixedByteLength = true;
+    for (let i = 0, il = this.fields.length; i < il; i++) {
+      const {key, codec} = this.fields[i];
+      byteLength += codec.getByteLength(object[key]);
+      fixedByteLength = fixedByteLength && codec.fixedByteLength;
+    }
+    if (fixedByteLength) {
+      // If all the fields had a fixed length, cache the definition's length.
+      this.byteLength = byteLength;
+    }
+    return byteLength;
+  }
+
+  /**
+  * Read an object from the given stream.
+  *
+  * @param {StreamView} streamView
+  * @returns {Object}
+  */
+  get(streamView) {
+    let object = {};
+    for (let i = 0, il = this.fields.length; i < il; i++) {
+      const {key, codec} = this.fields[i];
+      object[key] = codec.get(streamView, this.littleEndian);
+    }
+    return object;
+  }
+
+  /**
+  * Write an object into the given stream.
+  *
+  * @param {StreamView} streamView
+  * @param {Object} object
+  */
+  set(streamView, object) {
+    for (let i = 0, il = this.fields.length; i < il; i++) {
+      const {key, codec} = this.fields[i];
+      codec.set(streamView, object[key], this.littleEndian);
+    }
   }
 }
 
@@ -345,11 +414,18 @@ class VariableLengthUnsignedIntegerCodec {
   }
 }
 
+_codecTypes.array = ArrayCodec;
+_codecTypes.boolean = BooleanCodec;
+_codecTypes.booleanArray = BooleanArrayCodec;
+_codecTypes.float = FloatCodec;
+_codecTypes.int = IntegerCodec;
+_codecTypes.object = ObjectCodec;
+_codecTypes.string = StringCodec;
+_codecTypes.variableLength = VariableLengthUnsignedIntegerCodec;
 
-// This is a set of codecs that can be used by fields to convert typed values
-// into an array of bytes, and to convert those bytes back into values. Note
-// that the "array" type does not have a codec in this object, because
-// ArrayCodec objects are created on the fly as needed.
+// This is a set of shared codec instances which can safely be reused between
+// definitions and such. Array and Object don't have instances here, because
+// they have instance-specific options, so they are created on the fly.
 _codecs.boolean = new BooleanCodec();
 _codecs.booleanArray = new BooleanArrayCodec();
 _codecs.float32 = new FloatCodec({byteLength: 4});
@@ -422,17 +498,6 @@ StreamView.createFromString = (string) => {
 
 
 /**
-* Return true if the type is one of the allowed types.
-*
-* @param {string} type A type string, such as "array" or "uint8".
-* @returns {boolean}
-*/
-function isValidType(type) {
-  return _codecs.hasOwnProperty(type) || type === 'array';
-}
-
-
-/**
 * Fields represent a single property in an object. These fields are grouped
 * into definition objects.
 */
@@ -448,6 +513,7 @@ class Field {
       throw new Error(`Invalid type '${this.type}'`);
     }
     if (this.type === 'array') {
+      // FIXME: should be able to do arrays of arrays or strings
       if (this.valueType === 'array' || this.valueType === 'string' ||
           !isValidType(this.valueType)) {
         throw new Error(`Invalid array value type '${this.valueType}'`);
@@ -459,72 +525,23 @@ class Field {
   }
 }
 
+
 /**
 * Definitions are a grouping of fields, and are used to encode or decode an
 * individual message. They can be grouped into schemas or used standalone.
 */
 class Definition {
-  constructor(fields, {id, key, littleEndian} = {}) {
-    this.fields = fields;
+  constructor(codec, {id, key, littleEndian, codecArgs} = {}) {
+    if (typeof codec === 'string') {
+      if (!isValidType(codec)) {
+        throw new Error(`invalid definition type '${codec}'`);
+      }
+      codec = _codecs[codec] || new _codecTypes[codec](...codecArgs);
+    }
+    this.codec = codec;
     this.id = id;
     this.key = key;
     this.littleEndian = littleEndian;
-  }
-
-  /**
-  * Calculate the number of bytes required to encode the given object.
-  *
-  * @param {Object} object The object to be encoded.
-  * @returns {number}
-  */
-  getByteLength(object) {
-    if (this.byteLength != null) {
-      return this.byteLength;
-    }
-    let byteLength = 0;
-    let fixedByteLength = true;
-    for (let i = 0, il = this.fields.length; i < il; i++) {
-      const {key, codec} = this.fields[i];
-      if (codec.byteLength != null) {
-        byteLength += codec.byteLength;
-      } else {
-        byteLength += codec.getByteLength(object[key]);
-        fixedByteLength = false;
-      }
-    }
-    if (fixedByteLength) {
-      // If all the fields had a fixed length, cache the definition's length.
-      this.byteLength = byteLength;
-    }
-    return byteLength;
-  }
-
-  /**
-  * Read an object from the given stream.
-  *
-  * @param {StreamView} streamView
-  * @returns {Object}
-  */
-  get(streamView) {
-    let values = {};
-    for (let i = 0, il = this.fields.length; i < il; i++) {
-      const {key, codec} = this.fields[i];
-      values[key] = codec.get(streamView, this.littleEndian);
-    }
-    return values;
-  }
-
-  /**
-  * Write an object into the given stream.
-  *
-  * @param {StreamView} streamView
-  * @param {Object} object
-  */
-  set(streamView, object) {
-    for (let i = 0, il = this.fields.length; i < il; i++) {
-      const {key, codec} = this.fields[i];
-      codec.set(streamView, object[key], this.littleEndian);
-    }
   }
 
   /**
@@ -534,7 +551,7 @@ class Definition {
   * @returns {Object}
   */
   parse(string) {
-    return this.get(StreamView.createFromString(string));
+    return this.codec.get(StreamView.createFromString(string));
   }
 
   /**
@@ -544,8 +561,8 @@ class Definition {
   * @returns {string}
   */
   stringify(object) {
-    let streamView = StreamView.create(this.getByteLength(object));
-    this.set(streamView, object);
+    let streamView = StreamView.create(this.codec.getByteLength(object));
+    this.codec.set(streamView, object);
     return streamView.toString();
   }
 }
@@ -567,11 +584,9 @@ class Schema {
     this.nextDefinitionId = 1;
   }
 
-  define(key, fields) {
+  define(key, codec, ...args) {
     const id = this.nextDefinitionId++;
-    let definition = new Definition(fields.map((options) => {
-      return new Field(options);
-    }), {id: id, key: key});
+    let definition = new Definition(codec, {id: id, key: key, codecArgs: args});
     this.definitions[key] = definition;
     this.definitionsById[id] = definition;
     return definition;
@@ -587,7 +602,7 @@ class Schema {
     }
     return {
       key: definition.key,
-      data: definition.get(streamView),
+      data: definition.codec.get(streamView),
     };
   }
 
@@ -598,26 +613,11 @@ class Schema {
     }
     let idCodec = _codecs[this.idType];
     let streamView = StreamView.create(idCodec.byteLength +
-                                       definition.getByteLength(object));
+                                       definition.codec.getByteLength(object));
     idCodec.set(streamView, definition.id);
-    definition.set(streamView, object);
+    definition.codec.set(streamView, object);
     return streamView.toString();
   }
-}
-
-
-/**
-* Create a new Definition object.
-*
-* @param {Array.<{key: string, type: string, valueType: string}>} fields The
-*   fields that make up the definition. These will be converted into {Field}
-*   instances when constructing the definition.
-* @returns {Definition}
-*/
-export function define(fields) {
-  return new Definition(fields.map((options) => {
-    return new Field(options);
-  }));
 }
 
 
@@ -626,6 +626,30 @@ export function define(fields) {
 */
 export function createSchema() {
   return new Schema();
+}
+
+
+/**
+* Create a new Definition object.
+*
+* @param {string|Codec} codec Type of codec or an actual codec object for the
+*   values this definition encodes.
+* @param {...} args Any arguments to pass along when creating a codec.
+* @returns {Definition}
+*/
+export function define(codec, ...args) {
+  return new Definition(codec, {codecArgs: args});
+}
+
+
+/**
+* Return true if the type is one of the allowed types.
+*
+* @param {string} type A type string, such as "array" or "uint8".
+* @returns {boolean}
+*/
+export function isValidType(type) {
+  return _codecTypes.hasOwnProperty(type) || _codecs.hasOwnProperty(type);
 }
 
 

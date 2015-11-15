@@ -225,7 +225,7 @@ function describeJettison({withPolyfills}={}) {
     });
 
     describe('definitions', () => {
-      let definition = jettison.define([
+      let definition = jettison.define('object', [
         {key: 'id', type: 'int32'},
         {key: 'x', type: 'float64'},
         {key: 'y', type: 'float64'},
@@ -241,8 +241,9 @@ function describeJettison({withPolyfills}={}) {
         flags: [true, false, true],
         health: 100,
       };
-      let streamView = StreamView.create(definition.getByteLength(expectedValue));
-      definition.set(streamView, expectedValue);
+      let streamView = StreamView.create(
+        definition.codec.getByteLength(expectedValue));
+      definition.codec.set(streamView, expectedValue);
       let string = definition.stringify(expectedValue);
 
       before(() => {
@@ -265,7 +266,7 @@ function describeJettison({withPolyfills}={}) {
       });
 
       it('should convert byte arrays back to native values', () => {
-        let value = definition.get(streamView);
+        const value = definition.codec.get(streamView);
         expect(value).to.deep.equal(expectedValue);
       });
 
@@ -274,21 +275,40 @@ function describeJettison({withPolyfills}={}) {
       });
 
       it('should convert strings back to native values', () => {
-        let value = definition.parse(string);
+        const value = definition.parse(string);
+        expect(value).to.deep.equal(expectedValue);
+      });
+
+      it('should allow you to use other types for the definition', () => {
+        const definition = jettison.define('array', 'string');
+
+        const expectedValue = ['foo', 'bar', 'baz'];
+        let streamView = StreamView.create(
+          definition.codec.getByteLength(expectedValue));
+        definition.codec.set(streamView, expectedValue);
+        expect(streamView.toArray()).to.deep.equal([
+          3,
+          3, 102, 111, 111,
+          3, 98, 97, 114,
+          3, 98, 97, 122
+        ]);
+
+        const string = definition.stringify(['foo', 'bar', 'baz']);
+        const value = definition.parse(string);
         expect(value).to.deep.equal(expectedValue);
       });
     });
 
     describe('schemas', () => {
       let schema = jettison.createSchema();
-      schema.define('spawn', [
+      schema.define('spawn', 'object', [
         {key: 'id', type: 'int32'},
         {key: 'x', type: 'float64'},
         {key: 'y', type: 'float64'},
         {key: 'points', type: 'array', valueType: 'float64'},
         {key: 'flags', type: 'booleanArray'},
       ]);
-      schema.define('position', [
+      schema.define('position', 'object', [
         {key: 'id', type: 'int32'},
         {key: 'x', type: 'float64'},
         {key: 'y', type: 'float64'},
