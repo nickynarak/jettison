@@ -2,6 +2,6 @@
   "browser": true,
   "eqnull": true,
   "esnext": true,
-  "globalstrict": true,
-  "node": true
+  "node": true,
+  "strict": "global"
 }
